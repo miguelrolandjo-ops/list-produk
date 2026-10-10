@@ -1,0 +1,8 @@
+﻿.env
+.env.*
+!.env.example
+build/
+.dart_tool/
+.idea/
+supabase/.temp/
+worker/*.exe
