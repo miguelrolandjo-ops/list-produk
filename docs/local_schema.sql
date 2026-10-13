@@ -1,0 +1,188 @@
+-- =====================================================================
+-- Store Price Guide App: LOCAL schema (SQLite, on the phone)
+-- Use with drift: save as app/lib/data/local.drift
+-- Ids are UUID strings generated on the phone (package: uuid).
+-- Money is whole Rupiah as INTEGER. Timestamps are ISO-8601 UTC text.
+-- =====================================================================
+
+-- =========================== OWNER PHONE =============================
+
+-- Single-row settings (pricing + server link)
+CREATE TABLE settings (
+  id                INTEGER PRIMARY KEY CHECK (id = 1),
+  store_id          TEXT,                       -- from server create_store()
+  min_retail        INTEGER NOT NULL DEFAULT 5000,
+  round_to          INTEGER NOT NULL DEFAULT 5000 CHECK (round_to > 0),
+  above_markup_pct  REAL    NOT NULL DEFAULT 30,
+  basis             TEXT    NOT NULL DEFAULT 'highest'
+                    CHECK (basis IN ('highest', 'lowest', 'latest')),
+  last_backup_at    TEXT
+);
+
+CREATE TABLE pricing_anchors (
+  supply_price INTEGER PRIMARY KEY CHECK (supply_price > 0),
+  retail_price INTEGER NOT NULL CHECK (retail_price > 0)
+);
+
+CREATE TABLE margin_thresholds (
+  id             INTEGER PRIMARY KEY,
+  min_supply     INTEGER NOT NULL DEFAULT 0,
+  max_supply     INTEGER,                       -- NULL = no upper limit
+  min_margin_pct REAL    NOT NULL
+);
+
+CREATE TABLE categories (
+  id   TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE suppliers (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  phone      TEXT,
+  address    TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE products (
+  id                 TEXT PRIMARY KEY,
+  name               TEXT NOT NULL,
+  model              TEXT,
+  category_id        TEXT REFERENCES categories(id) ON DELETE SET NULL,
+  unit               TEXT NOT NULL DEFAULT 'pcs',
+  photo_local_path   TEXT,                      -- file on this phone
+  photo_remote_path  TEXT,                      -- path in 'product-photos' after upload
+  retail_price       INTEGER,
+  retail_is_override INTEGER NOT NULL DEFAULT 0 CHECK (retail_is_override IN (0, 1)),
+  created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  deleted_at         TEXT,                      -- soft delete, so employees learn about removals
+  published_at       TEXT                       -- last successful publish_catalog()
+);
+CREATE INDEX products_name ON products (name);
+
+-- Supplier-specific names for the same product
+CREATE TABLE product_aliases (
+  id          TEXT PRIMARY KEY,
+  product_id  TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  supplier_id TEXT NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+  alias       TEXT NOT NULL,
+  alias_norm  TEXT NOT NULL,                    -- lowercased, trimmed, single spaces
+  UNIQUE (supplier_id, alias_norm)
+);
+
+-- Price history, never overwritten
+CREATE TABLE supplier_prices (
+  id          TEXT PRIMARY KEY,
+  product_id  TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  supplier_id TEXT NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+  unit_price  INTEGER NOT NULL CHECK (unit_price > 0),
+  po_line_id  TEXT REFERENCES po_lines(id) ON DELETE SET NULL,
+  observed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX supplier_prices_latest ON supplier_prices (product_id, supplier_id, observed_at DESC);
+
+CREATE TABLE purchase_orders (
+  id            TEXT PRIMARY KEY,
+  supplier_id   TEXT REFERENCES suppliers(id) ON DELETE SET NULL,
+  status        TEXT NOT NULL DEFAULT 'queued'
+                CHECK (status IN ('queued', 'uploading', 'processing', 'needs_review', 'saved', 'failed')),
+  source        TEXT NOT NULL CHECK (source IN ('camera', 'gallery', 'share', 'whatsapp')),
+  po_date       TEXT,
+  server_job_id TEXT,                           -- extraction_jobs.id on the server
+  raw_result    TEXT,                           -- extraction JSON, kept for debugging
+  created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  reviewed_at   TEXT
+);
+
+CREATE TABLE po_pages (
+  id         TEXT PRIMARY KEY,
+  po_id      TEXT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+  page_no    INTEGER NOT NULL,
+  local_path TEXT NOT NULL,                     -- compressed image on this phone
+  UNIQUE (po_id, page_no)
+);
+
+CREATE TABLE po_lines (
+  id                 TEXT PRIMARY KEY,
+  po_id              TEXT NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+  line_no            INTEGER NOT NULL,
+  raw_name           TEXT NOT NULL,
+  qty                REAL,
+  unit               TEXT,
+  unit_price         INTEGER,
+  confidence         TEXT,                      -- JSON, e.g. {"unit_price":0.62}
+  matched_product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  match_status       TEXT NOT NULL DEFAULT 'new'
+                     CHECK (match_status IN ('auto', 'suggested', 'confirmed', 'new', 'ignored'))
+);
+
+-- Latest price per product per supplier
+CREATE VIEW current_supplier_prices AS
+SELECT product_id, supplier_id, unit_price, observed_at FROM (
+  SELECT product_id, supplier_id, unit_price, observed_at,
+         ROW_NUMBER() OVER (PARTITION BY product_id, supplier_id
+                            ORDER BY observed_at DESC) AS rn
+  FROM supplier_prices
+) WHERE rn = 1;
+
+-- Products whose employee-visible fields changed since the last publish
+CREATE VIEW products_to_publish AS
+SELECT p.id, p.name, p.model, c.name AS category, p.unit,
+       p.photo_remote_path AS photo_path, p.retail_price,
+       (p.deleted_at IS NOT NULL) AS is_deleted
+FROM products p LEFT JOIN categories c ON c.id = p.category_id
+WHERE p.published_at IS NULL OR p.updated_at > p.published_at;
+
+-- Bump updated_at only when an employee-visible field changes
+-- (so marking a product as published doesn't make it "dirty" again).
+CREATE TRIGGER products_touch
+AFTER UPDATE OF name, model, category_id, unit, photo_remote_path, retail_price, deleted_at
+ON products
+BEGIN
+  UPDATE products SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id;
+END;
+
+-- Renaming a category changes what employees see on its products
+CREATE TRIGGER categories_touch
+AFTER UPDATE OF name ON categories
+BEGIN
+  UPDATE products SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+   WHERE category_id = NEW.id;
+END;
+
+-- ========================== EMPLOYEE PHONE ===========================
+-- Separate database file on employee devices. Mirrors server catalog_items.
+
+CREATE TABLE catalog (
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  model        TEXT,
+  category     TEXT,
+  unit         TEXT NOT NULL DEFAULT 'pcs',
+  photo_path   TEXT,
+  retail_price INTEGER,
+  updated_at   TEXT NOT NULL                    -- server time; max value = next sync cursor
+);
+
+-- Full-text search for fast, partial-word lookup
+CREATE VIRTUAL TABLE catalog_search USING fts5(
+  name, model, category, content='catalog', content_rowid='rowid',
+  tokenize = 'unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER catalog_ai AFTER INSERT ON catalog BEGIN
+  INSERT INTO catalog_search(rowid, name, model, category)
+  VALUES (NEW.rowid, NEW.name, NEW.model, NEW.category);
+END;
+CREATE TRIGGER catalog_ad AFTER DELETE ON catalog BEGIN
+  INSERT INTO catalog_search(catalog_search, rowid, name, model, category)
+  VALUES ('delete', OLD.rowid, OLD.name, OLD.model, OLD.category);
+END;
+CREATE TRIGGER catalog_au AFTER UPDATE ON catalog BEGIN
+  INSERT INTO catalog_search(catalog_search, rowid, name, model, category)
+  VALUES ('delete', OLD.rowid, OLD.name, OLD.model, OLD.category);
+  INSERT INTO catalog_search(rowid, name, model, category)
+  VALUES (NEW.rowid, NEW.name, NEW.model, NEW.category);
+END;
+-- Search example: SELECT c.* FROM catalog_search s JOIN catalog c ON c.rowid = s.rowid
+--                 WHERE catalog_search MATCH 'kabel* type*' ORDER BY rank;

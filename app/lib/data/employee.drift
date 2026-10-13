@@ -1,0 +1,34 @@
+﻿-- EMPLOYEE PHONE schema. Source: docs/local_schema.sql (employee section).
+
+CREATE TABLE catalog (
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  model        TEXT,
+  category     TEXT,
+  unit         TEXT NOT NULL DEFAULT 'pcs',
+  photo_path   TEXT,
+  retail_price INTEGER,
+  updated_at   TEXT NOT NULL                    -- server time; max value = next sync cursor
+);
+
+-- Full-text search for fast, partial-word lookup
+CREATE VIRTUAL TABLE catalog_search USING fts5(
+  name, model, category, content='catalog', content_rowid='rowid',
+  tokenize = 'unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER catalog_ai AFTER INSERT ON catalog BEGIN
+  INSERT INTO catalog_search(rowid, name, model, category)
+  VALUES (NEW.rowid, NEW.name, NEW.model, NEW.category);
+END;
+CREATE TRIGGER catalog_ad AFTER DELETE ON catalog BEGIN
+  INSERT INTO catalog_search(catalog_search, rowid, name, model, category)
+  VALUES ('delete', OLD.rowid, OLD.name, OLD.model, OLD.category);
+END;
+CREATE TRIGGER catalog_au AFTER UPDATE ON catalog BEGIN
+  INSERT INTO catalog_search(catalog_search, rowid, name, model, category)
+  VALUES ('delete', OLD.rowid, OLD.name, OLD.model, OLD.category);
+  INSERT INTO catalog_search(rowid, name, model, category)
+  VALUES (NEW.rowid, NEW.name, NEW.model, NEW.category);
+END;
+-- Search example: SELECT c.* FROM catalog_search s JOIN catalog c ON c.rowid = s.rowid
+--                 WHERE catalog_search MATCH 'kabel* type*' ORDER BY rank;
