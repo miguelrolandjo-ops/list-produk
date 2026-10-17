@@ -3,6 +3,8 @@ package extractor
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -128,5 +130,27 @@ func TestNew(t *testing.T) {
 		if _, err := New(kind); err == nil {
 			t.Errorf("New(%q) should fail for now", kind)
 		}
+	}
+}
+
+// shared/extraction_sample.json is also parsed by the app's tests, so the two
+// sides cannot drift apart without a test failing.
+func TestFakeMatchesSharedSample(t *testing.T) {
+	raw, err := os.ReadFile("../../shared/extraction_sample.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want any
+	if err := json.Unmarshal(raw, &want); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := NewFake().Extract(context.Background(), nil)
+	b, _ := json.Marshal(r)
+	var got any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("fake output differs from shared/extraction_sample.json:\n got: %s", b)
 	}
 }
