@@ -163,22 +163,13 @@ class ProductService {
     if (override != null) _checkRetail(override);
 
     return _db.transaction(() async {
-      final categoryId = await _findOrCreateCategory(input.categoryName);
-      final supplierId = await _findOrCreateSupplier(input.supplierName);
-      final productId = _uuid.v4();
-      final model = input.model?.trim();
-
-      await _db
-          .into(_db.products)
-          .insert(
-            ProductsCompanion.insert(
-              id: Value(productId),
-              name: name,
-              model: Value(model == null || model.isEmpty ? null : model),
-              categoryId: Value(categoryId),
-              unit: Value(input.unit),
-            ),
-          );
+      final supplierId = await findOrCreateSupplier(input.supplierName);
+      final productId = await insertProduct(
+        name: name,
+        model: input.model,
+        categoryName: input.categoryName,
+        unit: input.unit,
+      );
       final calculated = await recordSupplierPrice(
         productId,
         supplierId,
@@ -199,6 +190,31 @@ class ProductService {
     });
   }
 
+  /// Inserts a product row with no price. Call inside a transaction together
+  /// with [recordSupplierPrice]. Returns the new product id.
+  Future<String> insertProduct({
+    required String name,
+    String? model,
+    String? categoryName,
+    String unit = 'pcs',
+  }) async {
+    final categoryId = await _findOrCreateCategory(categoryName);
+    final productId = _uuid.v4();
+    final m = model?.trim();
+    await _db
+        .into(_db.products)
+        .insert(
+          ProductsCompanion.insert(
+            id: Value(productId),
+            name: name.trim(),
+            model: Value(m == null || m.isEmpty ? null : m),
+            categoryId: Value(categoryId),
+            unit: Value(unit),
+          ),
+        );
+    return productId;
+  }
+
   /// Stores a new supplier price (history is never overwritten), then
   /// recalculates the product's retail price unless it is an override.
   /// Returns the product's retail price afterwards.
@@ -207,6 +223,7 @@ class ProductService {
     String supplierId,
     int unitPrice, {
     DateTime? observedAt,
+    String? poLineId,
   }) {
     _checkSupply(unitPrice);
     return _db.transaction(() async {
@@ -218,6 +235,7 @@ class ProductService {
               productId: productId,
               supplierId: supplierId,
               unitPrice: unitPrice,
+              poLineId: Value(poLineId),
               observedAt: Value(
                 (observedAt ?? _now()).toUtc().toIso8601String(),
               ),
@@ -439,7 +457,7 @@ class ProductService {
     return id;
   }
 
-  Future<String> _findOrCreateSupplier(String raw) async {
+  Future<String> findOrCreateSupplier(String raw) async {
     final name = raw.trim();
     final existing =
         await (_db.select(_db.suppliers)
