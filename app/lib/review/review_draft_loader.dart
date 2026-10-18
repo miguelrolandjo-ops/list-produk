@@ -46,6 +46,23 @@ class ReviewDraftLoader {
         )
         .get();
 
+    // What this supplier last charged for each product, to fill in prices the
+    // model could not read.
+    final supplierId = po.readNullable<String>('supplier_id');
+    final known = <String, int>{};
+    if (supplierId != null) {
+      final rows = await _db
+          .customSelect(
+            'SELECT product_id, unit_price FROM current_supplier_prices '
+            'WHERE supplier_id = ?',
+            variables: [Variable.withString(supplierId)],
+          )
+          .get();
+      for (final r in rows) {
+        known[r.read<String>('product_id')] = r.read<int>('unit_price');
+      }
+    }
+
     final date = po.readNullable<String>('po_date');
     return ReviewDraft(
       poId: poId,
@@ -56,11 +73,11 @@ class ReviewDraftLoader {
         for (final s in suppliers) normalizeName(s.read<String>('name')),
       },
       poDate: date == null ? null : DateTime.parse('${date}T00:00:00Z'),
-      lines: [for (final r in lineRows) _line(r)],
+      lines: [for (final r in lineRows) _line(r, known)],
     );
   }
 
-  DraftLine _line(QueryRow r) {
+  DraftLine _line(QueryRow r, Map<String, int> known) {
     final conf = r.readNullable<String>('confidence');
     final c = conf == null
         ? const <String, Object?>{}
@@ -75,6 +92,8 @@ class ReviewDraftLoader {
             _ => DraftKind.isNew,
           };
     final name = r.read<String>('raw_name');
+    final previous = kind == DraftKind.isNew ? null : known[productId];
+    final read = r.readNullable<int>('unit_price');
     return DraftLine(
       poLineId: r.read<String>('id'),
       rawName: name,
@@ -86,7 +105,9 @@ class ReviewDraftLoader {
           : r.readNullable<String>('product_name'),
       qty: r.readNullable<double>('qty'),
       unit: r.readNullable<String>('unit'),
-      unitPrice: r.readNullable<int>('unit_price'),
+      unitPrice: read ?? previous,
+      previousPrice: previous,
+      priceFromCatalog: read == null && previous != null,
       nameConfidence: (c['name'] as num?)?.toDouble() ?? 0,
       unitPriceConfidence: (c['unit_price'] as num?)?.toDouble() ?? 0,
     );

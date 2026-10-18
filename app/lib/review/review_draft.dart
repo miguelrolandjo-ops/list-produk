@@ -9,7 +9,7 @@ const lowConfidence = 0.7;
 /// alias match ([auto]).
 enum DraftKind { auto, suggestion, linked, isNew }
 
-enum LineHint { none, priceMissing, priceUnclear, nameUnclear }
+enum LineHint { none, priceMissing, priceFromCatalog, priceUnclear, nameUnclear }
 
 class DraftLine {
   const DraftLine({
@@ -24,6 +24,8 @@ class DraftLine {
     this.unitPrice,
     this.nameConfidence = 0,
     this.unitPriceConfidence = 0,
+    this.previousPrice,
+    this.priceFromCatalog = false,
     this.ignored = false,
     this.priceChecked = false,
     this.nameChecked = false,
@@ -42,6 +44,13 @@ class DraftLine {
   final int? unitPrice;
   final double nameConfidence;
   final double unitPriceConfidence;
+
+  /// What this supplier last charged for the matched product, if known.
+  final int? previousPrice;
+
+  /// [unitPrice] is not from the PO (it was unreadable) but the price already
+  /// in the catalog, used as the default. Highlighted until the owner checks it.
+  final bool priceFromCatalog;
   final bool ignored;
   final bool priceChecked;
   final bool nameChecked;
@@ -50,6 +59,7 @@ class DraftLine {
   LineHint get hint {
     if (ignored) return LineHint.none;
     if (unitPrice == null) return LineHint.priceMissing;
+    if (!priceChecked && priceFromCatalog) return LineHint.priceFromCatalog;
     if (!priceChecked && unitPriceConfidence < lowConfidence) {
       return LineHint.priceUnclear;
     }
@@ -67,6 +77,8 @@ class DraftLine {
     Object? productId = _keep,
     Object? productName = _keep,
     Object? unitPrice = _keep,
+    Object? previousPrice = _keep,
+    bool? priceFromCatalog,
     bool? ignored,
     bool? priceChecked,
     bool? nameChecked,
@@ -88,6 +100,10 @@ class DraftLine {
         : unitPrice as int?,
     nameConfidence: nameConfidence,
     unitPriceConfidence: unitPriceConfidence,
+    previousPrice: identical(previousPrice, _keep)
+        ? this.previousPrice
+        : previousPrice as int?,
+    priceFromCatalog: priceFromCatalog ?? this.priceFromCatalog,
     ignored: ignored ?? this.ignored,
     priceChecked: priceChecked ?? this.priceChecked,
     nameChecked: nameChecked ?? this.nameChecked,
@@ -174,6 +190,10 @@ class ReviewDraft {
       kind: DraftKind.isNew,
       productId: null,
       productName: null,
+      // A price borrowed from the old product does not belong to a new one.
+      unitPrice: l.priceFromCatalog ? null : l.unitPrice,
+      priceFromCatalog: false,
+      previousPrice: null,
     ),
   );
 
@@ -181,7 +201,14 @@ class ReviewDraft {
     if (price != null && price <= 0) {
       throw ArgumentError('Harga harus lebih dari 0');
     }
-    return _line(i, (l) => l.copyWith(unitPrice: price, priceChecked: true));
+    return _line(
+      i,
+      (l) => l.copyWith(
+        unitPrice: price,
+        priceChecked: true,
+        priceFromCatalog: false,
+      ),
+    );
   }
 
   ReviewDraft rename(int i, String name) =>
@@ -215,7 +242,11 @@ class ReviewDraft {
               poLineId: l.poLineId,
               rawName: l.rawName,
               productId: l.productId!,
-              unitPrice: l.unitPrice,
+              // A default taken from the catalog was not seen on this PO, so
+              // it is only recorded once the owner has checked it.
+              unitPrice: l.priceFromCatalog && !l.priceChecked
+                  ? null
+                  : l.unitPrice,
             ),
       ],
     );

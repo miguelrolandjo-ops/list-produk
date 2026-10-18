@@ -298,7 +298,12 @@ class _LineRow extends StatelessWidget {
     };
     final caption = switch (hint) {
       LineHint.priceMissing => 'Harga tidak terbaca, isi harga',
-      LineHint.priceUnclear => 'Teks kurang jelas, cek harga',
+      LineHint.priceFromCatalog => 'Harga tidak terbaca, pakai harga lama',
+      LineHint.priceUnclear =>
+        line.previousPrice == null
+            ? 'Teks kurang jelas, cek harga'
+            : 'Teks kurang jelas, cek harga '
+                  '(sebelumnya ${groupThousands(line.previousPrice!)})',
       LineHint.nameUnclear => 'Teks kurang jelas, cek nama',
       LineHint.none => text,
     };

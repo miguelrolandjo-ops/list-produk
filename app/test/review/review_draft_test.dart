@@ -247,4 +247,115 @@ void main() {
       );
     });
   });
+
+  group('default price from the catalog', () {
+    late OwnerDatabase db;
+    late ProductService products;
+    final sample = File('../shared/extraction_sample.json').readAsStringSync();
+
+    setUp(() {
+      db = OwnerDatabase(NativeDatabase.memory());
+      products = ProductService(db);
+    });
+    tearDown(() => db.close());
+
+    Future<ReviewDraft> importSample({int sarungPrice = 18000}) async {
+      await products.addManual(
+        NewProductInput(
+          name: 'Sarung HP Silikon',
+          supplierName: 'CV Maju Elektrik',
+          supplyPrice: sarungPrice,
+        ),
+      );
+      await products.addManual(
+        const NewProductInput(
+          name: 'Charger Fast 20W',
+          supplierName: 'CV Maju Elektrik',
+          supplyPrice: 36000,
+        ),
+      );
+      await db.customStatement(
+        "INSERT INTO purchase_orders (id, status, source) VALUES ('po1', 'processing', 'gallery')",
+      );
+      await PoImportService(db).importResult('po1', sample);
+      return ReviewDraftLoader(db).load('po1');
+    }
+
+    DraftLine byName(ReviewDraft d, String raw) =>
+        d.lines.firstWhere((l) => l.rawName == raw);
+
+    test('an unreadable price defaults to what this supplier charged before', () async {
+      final d = await importSample();
+      final l = byName(d, 'Sarung HP Silikon');
+      expect(l.kind, DraftKind.suggestion);
+      expect(l.unitPrice, 18000);
+      expect(l.priceFromCatalog, isTrue);
+      expect(l.hint, LineHint.priceFromCatalog); // still highlighted
+    });
+
+    test('a low-confidence price is kept, with the previous one for reference', () async {
+      final d = await importSample();
+      final l = byName(d, 'Chrgr Fast 20W');
+      expect(l.kind, DraftKind.suggestion);
+      expect(l.unitPrice, 38500); // as read, not replaced
+      expect(l.previousPrice, 36000);
+      expect(l.priceFromCatalog, isFalse);
+      expect(l.hint, LineHint.priceUnclear);
+    });
+
+    test('a line with no match has no default', () async {
+      final d = await importSample();
+      final l = byName(d, 'Ongkos kirim');
+      expect(l.previousPrice, isNull);
+      expect(l.priceFromCatalog, isFalse);
+    });
+
+    test('no default when the PO supplier is not known yet', () async {
+      await products.addManual(
+        const NewProductInput(
+          name: 'Sarung HP Silikon',
+          supplierName: 'Toko Lain',
+          supplyPrice: 18000,
+        ),
+      );
+      await db.customStatement(
+        "INSERT INTO purchase_orders (id, status, source) VALUES ('po1', 'processing', 'gallery')",
+      );
+      await PoImportService(db).importResult('po1', sample);
+      final d = await ReviewDraftLoader(db).load('po1');
+      expect(byName(d, 'Sarung HP Silikon').unitPrice, isNull);
+    });
+
+    test('rejecting the match drops the borrowed price', () async {
+      var d = await importSample();
+      final i = d.lines.indexWhere((l) => l.rawName == 'Sarung HP Silikon');
+      d = d.makeNew(i);
+      expect(d.lines[i].unitPrice, isNull);
+      expect(d.lines[i].priceFromCatalog, isFalse);
+      expect(d.lines[i].hint, LineHint.priceMissing);
+    });
+
+    test('an unchecked default is not saved as a new price; a checked one is', () async {
+      var d = await importSample();
+      final i = d.lines.indexWhere((l) => l.rawName == 'Sarung HP Silikon');
+      // Keep only the Sarung line: link it, ignore the others.
+      d = d.accept(i);
+      for (var k = 0; k < d.lines.length; k++) {
+        if (k != i) d = d.toggleIgnore(k);
+      }
+      ReviewedLine linked(ReviewedPo po) =>
+          po.lines.singleWhere((l) => l.decision == LineDecision.link);
+
+      expect(linked(d.toReviewedPo()).unitPrice, isNull);
+      expect(linked(d.setPrice(i, 18000).toReviewedPo()).unitPrice, 18000);
+
+      Future<int> priceRows() async => (await db
+              .customSelect('SELECT COUNT(*) AS n FROM supplier_prices')
+              .getSingle())
+          .read<int>('n');
+      final before = await priceRows();
+      await ReviewService(db, products).save(d.toReviewedPo());
+      expect(await priceRows(), before); // nothing new was observed
+    });
+  });
 }
