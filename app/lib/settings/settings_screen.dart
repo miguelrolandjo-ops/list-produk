@@ -1,8 +1,11 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/display_prefs.dart';
+import '../core/providers.dart';
+import '../inbox/debug_sample.dart';
 
 /// Settings menu. Backup entries are added in 2.3.
 class SettingsScreen extends ConsumerWidget {
@@ -64,6 +67,22 @@ class SettingsScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/arsip'),
           ),
+          if (kDebugMode) ...[
+            const _Section('Uji coba (hanya build debug)'),
+            ListTile(
+              leading: const Icon(Icons.science_outlined),
+              title: const Text('Impor PO contoh'),
+              subtitle: const Text('Buat PO palsu lalu buka layar Review'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () async {
+                final id = await seedSamplePo(
+                  ref.read(ownerDbProvider),
+                  ref.read(poImportServiceProvider),
+                );
+                if (context.mounted) context.push('/po/$id/review');
+              },
+            ),
+          ],
         ],
       ),
     );

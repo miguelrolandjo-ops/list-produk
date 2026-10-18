@@ -11,7 +11,10 @@ import '../data/owner_database.dart';
 import '../pricing/bulk_adjust_service.dart';
 import '../pricing/margin_service.dart';
 import '../pricing/pricing_settings_service.dart';
+import '../inbox/po_import_service.dart';
 import '../products/product_service.dart';
+import '../review/review_draft_loader.dart';
+import '../review/review_service.dart';
 
 final ownerDbProvider = Provider<OwnerDatabase>((ref) {
   final db = OwnerDatabase();
@@ -21,6 +24,21 @@ final ownerDbProvider = Provider<OwnerDatabase>((ref) {
 
 final productServiceProvider = Provider<ProductService>(
   (ref) => ProductService(ref.watch(ownerDbProvider)),
+);
+
+final poImportServiceProvider = Provider<PoImportService>(
+  (ref) => PoImportService(ref.watch(ownerDbProvider)),
+);
+
+final reviewDraftLoaderProvider = Provider<ReviewDraftLoader>(
+  (ref) => ReviewDraftLoader(ref.watch(ownerDbProvider)),
+);
+
+final reviewServiceProvider = Provider<ReviewService>(
+  (ref) => ReviewService(
+    ref.watch(ownerDbProvider),
+    ref.watch(productServiceProvider),
+  ),
 );
 
 final pricingSettingsServiceProvider = Provider<PricingSettingsService>(

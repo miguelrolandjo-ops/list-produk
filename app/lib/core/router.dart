@@ -5,6 +5,7 @@ import '../backup/backup_screen.dart';
 import '../products/archived_products_screen.dart';
 import '../products/product_detail_screen.dart';
 import '../products/product_list_screen.dart';
+import '../review/review_screen.dart';
 import '../settings/bulk_adjust_screen.dart';
 import '../settings/margin_limits_screen.dart';
 import '../settings/price_rules_screen.dart';
@@ -31,6 +32,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/pengaturan/harga',
       builder: (_, _) => const PriceRulesScreen(),
+    ),
+    GoRoute(
+      path: '/po/:id/review',
+      builder: (_, state) => ReviewScreen(poId: state.pathParameters['id']!),
     ),
     GoRoute(
       path: '/produk/:id',
