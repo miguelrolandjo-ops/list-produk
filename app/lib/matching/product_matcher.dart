@@ -17,6 +17,7 @@ class MatchCandidate {
     required this.productId,
     required this.name,
     this.model,
+    this.categoryName,
     this.aliases = const [],
     this.lastPriceBySupplier = const {},
   });
@@ -24,6 +25,7 @@ class MatchCandidate {
   final String productId;
   final String name;
   final String? model;
+  final String? categoryName;
   final List<AliasEntry> aliases;
 
   /// Latest supply price per supplier id (whole Rupiah).
@@ -56,9 +58,9 @@ class ProductMatcher {
   }) : dictionary = dictionary ?? _learnFrom(candidates) {
     for (final c in candidates) {
       _texts[c.productId] = [
-        _grams(this.dictionary.apply('${c.name} ${c.model ?? ''}')),
-        _grams(this.dictionary.apply(c.name)),
-        for (final a in c.aliases) _grams(this.dictionary.apply(a.alias)),
+        trigrams(this.dictionary.apply('${c.name} ${c.model ?? ''}')),
+        trigrams(this.dictionary.apply(c.name)),
+        for (final a in c.aliases) trigrams(this.dictionary.apply(a.alias)),
       ];
     }
   }
@@ -106,13 +108,13 @@ class ProductMatcher {
       }
     }
 
-    final query = _grams(dictionary.apply(rawName));
+    final query = trigrams(dictionary.apply(rawName));
     // Raw scores can exceed 1 after boosts; sort on them, clamp for output.
     final scored = <({String id, double raw})>[];
     for (final c in candidates) {
       var base = 0.0;
       for (final g in _texts[c.productId]!) {
-        final s = _dice(query, g);
+        final s = diceSimilarity(query, g);
         if (s > base) base = s;
       }
       var score = base;
@@ -147,16 +149,5 @@ class ProductMatcher {
       productId: top.first.productId,
       suggestions: top,
     );
-  }
-
-  /// Trigram set of an already-normalized string (build guide section 9).
-  static Set<String> _grams(String normalized) {
-    final t = ' $normalized ';
-    return {for (var i = 0; i < t.length - 2; i++) t.substring(i, i + 3)};
-  }
-
-  static double _dice(Set<String> x, Set<String> y) {
-    if (x.isEmpty || y.isEmpty) return 0;
-    return 2 * x.intersection(y).length / (x.length + y.length);
   }
 }

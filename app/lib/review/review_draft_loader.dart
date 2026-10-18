@@ -4,6 +4,8 @@ import 'package:drift/drift.dart';
 
 import '../data/owner_database.dart';
 import '../inbox/extraction_result.dart';
+import '../matching/category_suggester.dart';
+import '../matching/match_repository.dart';
 import '../matching/normalize.dart';
 import 'review_draft.dart';
 
@@ -63,6 +65,15 @@ class ReviewDraftLoader {
       }
     }
 
+    // Suggest a category for every line from the catalog the owner already
+    // organized; it only becomes the default for new products.
+    final suggester = CategorySuggester.fromMatcher(
+      await MatchRepository(_db).buildMatcher(),
+    );
+    final categories = await _db
+        .customSelect('SELECT name FROM categories ORDER BY name COLLATE NOCASE')
+        .get();
+
     final date = po.readNullable<String>('po_date');
     return ReviewDraft(
       poId: poId,
@@ -73,11 +84,16 @@ class ReviewDraftLoader {
         for (final s in suppliers) normalizeName(s.read<String>('name')),
       },
       poDate: date == null ? null : DateTime.parse('${date}T00:00:00Z'),
-      lines: [for (final r in lineRows) _line(r, known)],
+      categoryOptions: [for (final c in categories) c.read<String>('name')],
+      lines: [for (final r in lineRows) _line(r, known, suggester)],
     );
   }
 
-  DraftLine _line(QueryRow r, Map<String, int> known) {
+  DraftLine _line(
+    QueryRow r,
+    Map<String, int> known,
+    CategorySuggester suggester,
+  ) {
     final conf = r.readNullable<String>('confidence');
     final c = conf == null
         ? const <String, Object?>{}
@@ -94,6 +110,7 @@ class ReviewDraftLoader {
     final name = r.read<String>('raw_name');
     final previous = kind == DraftKind.isNew ? null : known[productId];
     final read = r.readNullable<int>('unit_price');
+    final suggested = suggester.suggest(name)?.category;
     return DraftLine(
       poLineId: r.read<String>('id'),
       rawName: name,
@@ -108,6 +125,8 @@ class ReviewDraftLoader {
       unitPrice: read ?? previous,
       previousPrice: previous,
       priceFromCatalog: read == null && previous != null,
+      suggestedCategory: suggested,
+      newCategory: kind == DraftKind.isNew ? suggested : null,
       nameConfidence: (c['name'] as num?)?.toDouble() ?? 0,
       unitPriceConfidence: (c['unit_price'] as num?)?.toDouble() ?? 0,
     );

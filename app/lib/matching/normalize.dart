@@ -17,3 +17,15 @@ List<String> baseTokens(String s) {
   final n = normalizeName(withMeters);
   return n.isEmpty ? const [] : n.split(' ');
 }
+
+/// Trigram set of an already-normalized string (build guide section 9).
+Set<String> trigrams(String normalized) {
+  final t = ' $normalized ';
+  return {for (var i = 0; i < t.length - 2; i++) t.substring(i, i + 3)};
+}
+
+/// Dice coefficient of two trigram sets, 0 (nothing shared) to 1 (identical).
+double diceSimilarity(Set<String> x, Set<String> y) {
+  if (x.isEmpty || y.isEmpty) return 0;
+  return 2 * x.intersection(y).length / (x.length + y.length);
+}

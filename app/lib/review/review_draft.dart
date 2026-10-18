@@ -26,6 +26,9 @@ class DraftLine {
     this.unitPriceConfidence = 0,
     this.previousPrice,
     this.priceFromCatalog = false,
+    this.newCategory,
+    this.suggestedCategory,
+    this.categoryChecked = false,
     this.ignored = false,
     this.priceChecked = false,
     this.nameChecked = false,
@@ -51,6 +54,15 @@ class DraftLine {
   /// [unitPrice] is not from the PO (it was unreadable) but the price already
   /// in the catalog, used as the default. Highlighted until the owner checks it.
   final bool priceFromCatalog;
+
+  /// Category for a new product (null = none). Starts as [suggestedCategory].
+  final String? newCategory;
+
+  /// What the catalog suggests for this name, if anything.
+  final String? suggestedCategory;
+
+  /// The owner has set or confirmed the category (it is no longer a guess).
+  final bool categoryChecked;
   final bool ignored;
   final bool priceChecked;
   final bool nameChecked;
@@ -79,6 +91,8 @@ class DraftLine {
     Object? unitPrice = _keep,
     Object? previousPrice = _keep,
     bool? priceFromCatalog,
+    Object? newCategory = _keep,
+    bool? categoryChecked,
     bool? ignored,
     bool? priceChecked,
     bool? nameChecked,
@@ -104,6 +118,11 @@ class DraftLine {
         ? this.previousPrice
         : previousPrice as int?,
     priceFromCatalog: priceFromCatalog ?? this.priceFromCatalog,
+    newCategory: identical(newCategory, _keep)
+        ? this.newCategory
+        : newCategory as String?,
+    suggestedCategory: suggestedCategory,
+    categoryChecked: categoryChecked ?? this.categoryChecked,
     ignored: ignored ?? this.ignored,
     priceChecked: priceChecked ?? this.priceChecked,
     nameChecked: nameChecked ?? this.nameChecked,
@@ -122,6 +141,7 @@ class ReviewDraft {
     required this.supplierConfidence,
     required this.knownSuppliers,
     required this.lines,
+    this.categoryOptions = const [],
     this.poDate,
     String? originalSupplierName,
   }) : originalSupplierName = originalSupplierName ?? supplierName;
@@ -136,6 +156,9 @@ class ReviewDraft {
 
   /// normalizeName of every supplier already in the catalog.
   final Set<String> knownSuppliers;
+
+  /// Existing category names, for the category picker.
+  final List<String> categoryOptions;
   final DateTime? poDate;
   final List<DraftLine> lines;
 
@@ -194,6 +217,8 @@ class ReviewDraft {
       unitPrice: l.priceFromCatalog ? null : l.unitPrice,
       priceFromCatalog: false,
       previousPrice: null,
+      // A new product starts with the catalog's suggestion for its name.
+      newCategory: l.categoryChecked ? l.newCategory : l.suggestedCategory,
     ),
   );
 
@@ -207,6 +232,18 @@ class ReviewDraft {
         unitPrice: price,
         priceChecked: true,
         priceFromCatalog: false,
+      ),
+    );
+  }
+
+  /// Sets the category of a new product; blank means none.
+  ReviewDraft setCategory(int i, String? name) {
+    final clean = name?.trim();
+    return _line(
+      i,
+      (l) => l.copyWith(
+        newCategory: clean == null || clean.isEmpty ? null : clean,
+        categoryChecked: true,
       ),
     );
   }
@@ -234,6 +271,7 @@ class ReviewDraft {
               poLineId: l.poLineId,
               rawName: l.rawName,
               newName: l.newName,
+              newCategory: l.newCategory,
               newUnit: l.unit ?? 'pcs',
               unitPrice: l.unitPrice,
             )
@@ -265,6 +303,7 @@ class ReviewDraft {
         supplierMatched: supplierMatched,
         supplierConfidence: supplierConfidence,
         knownSuppliers: knownSuppliers,
+        categoryOptions: categoryOptions,
         poDate: poDate,
         lines: lines ?? this.lines,
       );

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:drift/native.dart';
+import 'package:drift/drift.dart' show Variable;
 import 'package:flutter_application_1/data/owner_database.dart';
 import 'package:flutter_application_1/inbox/po_import_service.dart';
 import 'package:flutter_application_1/products/product_service.dart';
@@ -356,6 +357,123 @@ void main() {
       final before = await priceRows();
       await ReviewService(db, products).save(d.toReviewedPo());
       expect(await priceRows(), before); // nothing new was observed
+    });
+  });
+
+  group('category on new products', () {
+    late OwnerDatabase db;
+    late ProductService products;
+    final sample = File('../shared/extraction_sample.json').readAsStringSync();
+
+    setUp(() {
+      db = OwnerDatabase(NativeDatabase.memory());
+      products = ProductService(db);
+    });
+    tearDown(() => db.close());
+
+    /// A catalog the owner already filed, none of it close enough to the
+    /// sample lines to be offered as a match, so those lines stay new.
+    Future<ReviewDraft> importWithCatalog() async {
+      for (final (name, category) in [
+        ('Kabel Roll 10M', 'Kabel'),
+        ('Kabel Listrik 5M', 'Kabel'),
+        ('Kabel HDMI 3M', 'Kabel'),
+        ('Charger Mobil 2 Port', 'Charger'),
+        ('Charger Laptop 65W', 'Charger'),
+        ('Charger Adaptor 12V', 'Charger'),
+      ]) {
+        await products.addManual(
+          NewProductInput(
+            name: name,
+            categoryName: category,
+            supplierName: 'Toko Lama',
+            supplyPrice: 9500,
+          ),
+        );
+      }
+      await db.customStatement(
+        "INSERT INTO purchase_orders (id, status, source) VALUES ('po1', 'processing', 'gallery')",
+      );
+      await PoImportService(db).importResult('po1', sample);
+      return ReviewDraftLoader(db).load('po1');
+    }
+
+    DraftLine byName(ReviewDraft d, String raw) =>
+        d.lines.firstWhere((l) => l.rawName == raw);
+
+    test('a new line starts with the category the catalog suggests', () async {
+      final d = await importWithCatalog();
+      final cable = byName(d, 'Kabel Micro USB 1M');
+      expect(cable.kind, DraftKind.isNew);
+      expect(cable.newCategory, 'Kabel');
+      expect(cable.categoryChecked, isFalse); // still a guess
+      expect(byName(d, 'Ongkos kirim').newCategory, isNull); // nothing similar
+      expect(d.categoryOptions, ['Charger', 'Kabel']);
+    });
+
+    test('the owner can change or clear it; it is then a decision, not a guess', () async {
+      var d = await importWithCatalog();
+      final i = d.lines.indexWhere((l) => l.rawName == 'Kabel Micro USB 1M');
+      d = d.setCategory(i, '  Aksesoris ');
+      expect(d.lines[i].newCategory, 'Aksesoris');
+      expect(d.lines[i].categoryChecked, isTrue);
+      d = d.setCategory(i, '');
+      expect(d.lines[i].newCategory, isNull);
+      expect(d.lines[i].categoryChecked, isTrue);
+    });
+
+    test('rejecting a match gives the line its suggested category', () {
+      const matched = DraftLine(
+        poLineId: 'a',
+        rawName: 'Kabel Data',
+        kind: DraftKind.suggestion,
+        newName: 'Kabel Data',
+        productId: 'p1',
+        productName: 'Kabel X',
+        suggestedCategory: 'Kabel',
+        unitPrice: 5000,
+      );
+      var d = draft([matched]);
+      expect(d.lines[0].newCategory, isNull); // not a new product yet
+      d = d.makeNew(0);
+      expect(d.lines[0].newCategory, 'Kabel');
+    });
+
+    test('a category the owner chose survives rejecting and re-rejecting', () {
+      var d = draft([
+        const DraftLine(
+          poLineId: 'a',
+          rawName: 'Kabel Data',
+          kind: DraftKind.isNew,
+          newName: 'Kabel Data',
+          suggestedCategory: 'Kabel',
+          newCategory: 'Kabel',
+          unitPrice: 5000,
+        ),
+      ]);
+      d = d.setCategory(0, 'Aksesoris').makeNew(0);
+      expect(d.lines[0].newCategory, 'Aksesoris');
+    });
+
+    test('the category is saved with the new product', () async {
+      var d = await importWithCatalog();
+      final sarung = d.lines.indexWhere((l) => l.rawName == 'Sarung HP Silikon');
+      d = d.setPrice(sarung, 20000).setCategory(sarung, 'Casing');
+      d = d.toggleIgnore(d.lines.indexWhere((l) => l.rawName == 'Ongkos kirim'));
+      d = d.setPrice(d.lines.indexWhere((l) => l.rawName == 'Kbl Type C 100cm'), 9500);
+      await ReviewService(db, products).save(d.toReviewedPo());
+
+      Future<String?> categoryOf(String name) async => (await db
+              .customSelect(
+                'SELECT c.name AS n FROM products p '
+                'LEFT JOIN categories c ON c.id = p.category_id WHERE p.name = ?',
+                variables: [Variable.withString(name)],
+              )
+              .getSingle())
+          .readNullable<String>('n');
+      expect(await categoryOf('Kabel Micro USB 1M'), 'Kabel'); // suggestion kept
+      expect(await categoryOf('Sarung HP Silikon'), 'Casing'); // owner's choice
+      expect(await categoryOf('Kbl Type C 100cm'), isNull); // no suggestion
     });
   });
 }

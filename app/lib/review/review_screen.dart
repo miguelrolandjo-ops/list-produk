@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../core/providers.dart';
 import '../core/thousands_formatter.dart';
+import '../products/name_field.dart';
 import 'review_draft.dart';
 
 /// Review PO (mockup "2. Owner: Review PO"): check the supplier and each line,
@@ -154,13 +155,18 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                 title: const Text('Ubah harga'),
                 onTap: () => Navigator.pop(context, _Action.price),
               ),
-              if (line.kind == DraftKind.isNew)
+              if (line.kind == DraftKind.isNew) ...[
                 ListTile(
                   leading: const Icon(Icons.drive_file_rename_outline),
                   title: const Text('Ubah nama produk baru'),
                   onTap: () => Navigator.pop(context, _Action.rename),
-                )
-              else
+                ),
+                ListTile(
+                  leading: const Icon(Icons.label_outline),
+                  title: const Text('Ubah kategori'),
+                  onTap: () => Navigator.pop(context, _Action.category),
+                ),
+              ] else
                 ListTile(
                   leading: const Icon(Icons.link_off),
                   title: const Text('Bukan produk ini, buat produk baru'),
@@ -190,6 +196,13 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
           initial: line.newName,
         );
         if (name != null) _edit((d) => d.rename(i, name));
+      case _Action.category:
+        final category = await _askCategory(
+          context,
+          options: _draft!.categoryOptions,
+          initial: line.newCategory ?? '',
+        );
+        if (category != null) _edit((d) => d.setCategory(i, category));
       case _Action.makeNew:
         _edit((d) => d.makeNew(i));
       case _Action.toggleIgnore:
@@ -198,7 +211,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
   }
 }
 
-enum _Action { price, rename, makeNew, toggleIgnore }
+enum _Action { price, rename, category, makeNew, toggleIgnore }
 
 class _SupplierBox extends StatelessWidget {
   const _SupplierBox({required this.draft, required this.onEdit});
@@ -291,9 +304,15 @@ class _LineRow extends StatelessWidget {
       DraftKind.linked => (Icons.link, 'Terhubung${_to(line.productName)}'),
       DraftKind.isNew => (
         Icons.auto_awesome,
-        line.newName == line.rawName
-            ? 'Produk baru'
-            : 'Produk baru: ${line.newName}',
+        [
+          line.newName == line.rawName
+              ? 'Produk baru'
+              : 'Produk baru: ${line.newName}',
+          if (line.newCategory != null)
+            line.categoryChecked
+                ? line.newCategory!
+                : '${line.newCategory} (saran)',
+        ].join(' · '),
       ),
     };
     final caption = switch (hint) {
@@ -435,6 +454,42 @@ Future<int?> _askPrice(BuildContext context, int? initial) {
             final price = parseGrouped(controller.text);
             if (price != null && price > 0) Navigator.pop(context, price);
           },
+          child: const Text('Simpan'),
+        ),
+      ],
+    ),
+  );
+}
+
+/// Pick or type a category. Returns the name, an empty string for "no
+/// category", or null if cancelled.
+Future<String?> _askCategory(
+  BuildContext context, {
+  required List<String> options,
+  required String initial,
+}) {
+  var name = initial;
+  return showDialog<String>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Kategori produk baru'),
+      content: NameField(
+        label: 'Kategori',
+        options: options,
+        initialText: initial,
+        onChanged: (v) => name = v,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Batal'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, ''),
+          child: const Text('Tanpa kategori'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, name),
           child: const Text('Simpan'),
         ),
       ],

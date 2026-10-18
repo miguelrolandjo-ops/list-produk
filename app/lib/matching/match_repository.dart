@@ -16,7 +16,9 @@ class MatchRepository {
   Future<List<MatchCandidate>> loadCandidates() async {
     final products = await _db
         .customSelect(
-          'SELECT id, name, model FROM products WHERE deleted_at IS NULL',
+          'SELECT p.id, p.name, p.model, c.name AS category FROM products p '
+          'LEFT JOIN categories c ON c.id = p.category_id '
+          'WHERE p.deleted_at IS NULL',
         )
         .get();
 
@@ -54,6 +56,7 @@ class MatchRepository {
           productId: p.read<String>('id'),
           name: p.read<String>('name'),
           model: p.readNullable<String>('model'),
+          categoryName: p.readNullable<String>('category'),
           aliases: aliases[p.read<String>('id')] ?? const [],
           lastPriceBySupplier: prices[p.read<String>('id')] ?? const {},
         ),

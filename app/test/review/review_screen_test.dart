@@ -144,4 +144,58 @@ void main() {
     await tester.pump();
     expect(find.text('PO ini tidak bisa dibuka'), findsOneWidget);
   });
+
+  testWidgets('a new product shows a suggested category and it can be changed', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final db = OwnerDatabase(NativeDatabase.memory());
+    addTearDown(() => tester.runAsync(db.close));
+
+    late String poId;
+    await tester.runAsync(() async {
+      final service = ProductService(db);
+      for (final name in ['Kabel Roll 10M', 'Kabel Listrik 5M', 'Kabel HDMI 3M']) {
+        await service.addManual(
+          NewProductInput(
+            name: name,
+            categoryName: 'Kabel',
+            supplierName: 'Toko Lama',
+            supplyPrice: 9500,
+          ),
+        );
+      }
+      poId = await seedSamplePo(db, PoImportService(db));
+    });
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [ownerDbProvider.overrideWithValue(db)],
+        child: MaterialApp(home: ReviewScreen(poId: poId)),
+      ),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 200)),
+    );
+    await tester.pump();
+
+    // Suggested from the catalog, marked as a guess.
+    expect(find.text('Produk baru · Kabel (saran)'), findsOneWidget);
+
+    await tester.tap(find.text('Kabel Micro USB 1M'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Ubah kategori'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField), 'Aksesoris');
+    await tester.tap(find.widgetWithText(FilledButton, 'Simpan'));
+    await tester.pumpAndSettle();
+
+    // Now the owner's decision: no "(saran)".
+    expect(find.text('Produk baru · Aksesoris'), findsOneWidget);
+    expect(find.textContaining('(saran)'), findsNothing);
+  });
 }
