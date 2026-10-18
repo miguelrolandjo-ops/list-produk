@@ -7,9 +7,10 @@ import '../core/providers.dart';
 import '../core/rupiah.dart';
 import '../core/thousands_formatter.dart';
 import '../pricing/margin.dart';
+import 'name_field.dart';
 import 'product_service.dart';
 
-const _units = ['pcs', 'pack', 'box', 'dus'];
+const productUnits = ['pcs', 'pack', 'box', 'dus'];
 
 final _pct = NumberFormat.decimalPatternDigits(
   locale: 'id_ID',
@@ -32,7 +33,7 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
 
   String _category = '';
   String _supplier = '';
-  String _unit = _units.first;
+  String _unit = productUnits.first;
   bool _retailEdited = false;
   bool _saving = false;
   PricingConfig? _config;
@@ -138,7 +139,7 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
               decoration: const InputDecoration(labelText: 'Model (opsional)'),
             ),
             const SizedBox(height: 12),
-            _NameField(
+            NameField(
               label: 'Kategori (opsional)',
               options: _categoryNames,
               onChanged: (v) => _category = v,
@@ -148,13 +149,13 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
               initialValue: _unit,
               decoration: const InputDecoration(labelText: 'Satuan'),
               items: [
-                for (final u in _units)
+                for (final u in productUnits)
                   DropdownMenuItem(value: u, child: Text(u)),
               ],
               onChanged: (v) => setState(() => _unit = v ?? _unit),
             ),
             const SizedBox(height: 12),
-            _NameField(
+            NameField(
               label: 'Supplier',
               options: _supplierNames,
               onChanged: (v) => _supplier = v,
@@ -232,45 +233,6 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
           ],
         ),
       ),
-    );
-  }
-}
-
-/// Text field with suggestions from existing names. Typing a name that
-/// isn't in the list creates a new one on save.
-class _NameField extends StatelessWidget {
-  const _NameField({
-    required this.label,
-    required this.options,
-    required this.onChanged,
-    this.validator,
-  });
-
-  final String label;
-  final List<String> options;
-  final ValueChanged<String> onChanged;
-  final FormFieldValidator<String>? validator;
-
-  @override
-  Widget build(BuildContext context) {
-    return Autocomplete<String>(
-      optionsBuilder: (value) => options.where(
-        (o) => o.toLowerCase().contains(value.text.toLowerCase()),
-      ),
-      onSelected: onChanged,
-      fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
-        return TextFormField(
-          controller: controller,
-          focusNode: focusNode,
-          textCapitalization: TextCapitalization.words,
-          decoration: InputDecoration(
-            labelText: label,
-            helperText: 'Pilih yang ada, atau ketik nama baru',
-          ),
-          onChanged: onChanged,
-          validator: validator,
-        );
-      },
     );
   }
 }

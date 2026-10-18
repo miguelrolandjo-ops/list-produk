@@ -348,4 +348,160 @@ void main() {
       expect(await service.detail(id), isNotNull);
     });
   });
+
+  group('updateProduct', () {
+    test('changes name, unit and category; blank category clears it', () async {
+      final id = await service.addManual(input(category: 'Kabel'));
+      await service.updateProduct(
+        id,
+        name: '  Kabel USB-C Panjang ',
+        unit: 'box',
+        categoryName: 'Aksesoris',
+      );
+      var p = await product(id);
+      expect(p.name, 'Kabel USB-C Panjang');
+      expect(p.unit, 'box');
+      expect(p.categoryId, isNotNull);
+      expect(await service.categoryNames(), containsAll(['Kabel', 'Aksesoris']));
+
+      await service.updateProduct(id, name: p.name, unit: 'box', categoryName: '');
+      p = await product(id);
+      expect(p.categoryId, isNull);
+    });
+
+    test('a changed supplier price adds history and recalculates retail', () async {
+      final id = await service.addManual(input(supply: 9500)); // 15.000
+      final sup = await supplierId('CV Maju');
+      await service.updateProduct(
+        id,
+        name: 'Kabel USB-C',
+        unit: 'pcs',
+        supplyPrices: {sup: 12000},
+      );
+      expect((await service.priceHistory(id)).map((e) => e.unitPrice), [12000, 9500]);
+      expect((await product(id)).retailPrice, (await service.preview(12000)).retail);
+    });
+
+    test('an unchanged supplier price adds no history', () async {
+      final id = await service.addManual(input(supply: 9500));
+      final sup = await supplierId('CV Maju');
+      await service.updateProduct(
+        id,
+        name: 'Kabel USB-C',
+        unit: 'pcs',
+        supplyPrices: {sup: 9500},
+      );
+      expect(await service.priceHistory(id), hasLength(1));
+    });
+
+    test('a manual retail price is kept when the supplier price changes', () async {
+      final id = await service.addManual(input(supply: 9500, retail: 17500));
+      final sup = await supplierId('CV Maju');
+      await service.updateProduct(
+        id,
+        name: 'Kabel USB-C',
+        unit: 'pcs',
+        supplyPrices: {sup: 30000},
+      );
+      expect((await product(id)).retailPrice, 17500);
+    });
+
+    test('rejects bad input and writes nothing', () async {
+      final id = await service.addManual(input());
+      final sup = await supplierId('CV Maju');
+      Future<void> update({String name = 'Baru', String unit = 'pcs', Map<String, int> prices = const {}}) =>
+          service.updateProduct(id, name: name, unit: unit, supplyPrices: prices);
+
+      await expectLater(() async => update(name: '  '), throwsArgumentError);
+      await expectLater(() async => update(unit: ''), throwsArgumentError);
+      await expectLater(() async => update(prices: {sup: 0}), throwsArgumentError);
+      await expectLater(() async => update(prices: {'nobody': 5000}), throwsArgumentError);
+      await expectLater(
+        () async => service.updateProduct('missing', name: 'x', unit: 'pcs'),
+        throwsArgumentError,
+      );
+      // The unknown supplier failed after the name was written in the same
+      // transaction: it must have been rolled back.
+      expect((await product(id)).name, 'Kabel USB-C');
+    });
+
+    test('detail exposes the supplier id of each price', () async {
+      final id = await service.addManual(input());
+      final sup = await supplierId('CV Maju');
+      expect((await service.detail(id))!.currentPrices.single.supplierId, sup);
+    });
+  });
+
+  group('mass edit', () {
+    Future<String> add(String name, {String? category, String unit = 'pcs'}) =>
+        service.addManual(
+          NewProductInput(
+            name: name,
+            categoryName: category,
+            unit: unit,
+            supplierName: 'CV Maju',
+            supplyPrice: 9500,
+          ),
+        );
+
+    test('setUnitForMany changes only products that differ', () async {
+      final a = await add('A');
+      final b = await add('B', unit: 'box');
+      final c = await add('C');
+      final changed = await service.setUnitForMany([a, b], 'box');
+      expect(changed, 1); // b already had box
+      expect((await product(a)).unit, 'box');
+      expect((await product(b)).unit, 'box');
+      expect((await product(c)).unit, 'pcs');
+    });
+
+    test('an unchanged product is not marked as changed', () async {
+      final b = await add('B', unit: 'box');
+      final before = (await product(b)).updatedAt;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(await service.setUnitForMany([b], 'box'), 0);
+      expect((await product(b)).updatedAt, before);
+    });
+
+    test('setCategoryForMany sets, creates and clears categories', () async {
+      final a = await add('A');
+      final b = await add('B', category: 'Kabel');
+
+      expect(await service.setCategoryForMany([a, b], 'Aksesoris'), 2);
+      expect(await service.categoryNames(), contains('Aksesoris'));
+      expect((await product(a)).categoryId, (await product(b)).categoryId);
+      expect((await product(a)).categoryId, isNotNull);
+
+      expect(await service.setCategoryForMany([a], 'aksesoris'), 0); // same, any case
+      expect(await service.setCategoryForMany([a, b], ''), 2);
+      expect((await product(a)).categoryId, isNull);
+      expect((await product(b)).categoryId, isNull);
+      expect(await service.setCategoryForMany([a], null), 0); // already none
+    });
+
+    test('archived products are left alone', () async {
+      final a = await add('A');
+      final b = await add('B');
+      await service.archiveProduct(b);
+      expect(await service.setUnitForMany([a, b], 'dus'), 1);
+      expect((await product(b)).unit, 'pcs');
+    });
+
+    test('works for more products than one statement can hold', () async {
+      final ids = <String>[];
+      await db.transaction(() async {
+        for (var i = 0; i < 1200; i++) {
+          ids.add((await service.insertProduct(name: 'P$i')));
+        }
+      });
+      expect(await service.setUnitForMany(ids, 'pack'), 1200);
+    });
+
+    test('rejects an empty unit and ignores unknown ids', () async {
+      final a = await add('A');
+      expect(() => service.setUnitForMany([a], ' '), throwsArgumentError);
+      expect(await service.setUnitForMany(['nope'], 'box'), 0);
+      expect((await product(a)).unit, 'pcs');
+    });
+  });
 }

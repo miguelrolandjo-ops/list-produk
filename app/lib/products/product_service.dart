@@ -38,10 +38,12 @@ class RetailPreview {
 
 class SupplierPriceEntry {
   const SupplierPriceEntry({
+    required this.supplierId,
     required this.supplierName,
     required this.unitPrice,
     required this.observedAt,
   });
+  final String supplierId;
   final String supplierName;
   final int unitPrice;
   final DateTime observedAt;
@@ -312,6 +314,7 @@ class ProductService {
       currentPrices: [
         for (final c in current)
           SupplierPriceEntry(
+            supplierId: c.supplierId,
             supplierName: suppliers[c.supplierId] ?? '-',
             unitPrice: c.unitPrice,
             observedAt: DateTime.parse(c.observedAt).toLocal(),
@@ -333,11 +336,125 @@ class ProductService {
     return [
       for (final r in rows)
         SupplierPriceEntry(
+          supplierId: r.supplierId,
           supplierName: suppliers[r.supplierId] ?? '-',
           unitPrice: r.unitPrice,
           observedAt: DateTime.parse(r.observedAt).toLocal(),
         ),
     ];
+  }
+
+  /// Edits a product's name, unit and category, and records new supplier
+  /// prices, in one transaction.
+  ///
+  /// [supplyPrices] maps supplier id to the price now shown on the form. Only
+  /// prices that differ from the supplier's current price are recorded, as new
+  /// history entries (history is never overwritten), and each one recalculates
+  /// retail unless the product has a manual price. A blank [categoryName]
+  /// removes the category.
+  Future<void> updateProduct(
+    String productId, {
+    required String name,
+    required String unit,
+    String? categoryName,
+    Map<String, int> supplyPrices = const {},
+  }) {
+    final cleanName = name.trim();
+    if (cleanName.isEmpty) throw ArgumentError('Nama produk wajib diisi');
+    if (unit.trim().isEmpty) throw ArgumentError('Satuan wajib diisi');
+    for (final price in supplyPrices.values) {
+      _checkSupply(price);
+    }
+
+    return _db.transaction(() async {
+      final exists = await (_db.select(
+        _db.products,
+      )..where((p) => p.id.equals(productId))).getSingleOrNull();
+      if (exists == null) throw ArgumentError('Produk tidak ditemukan');
+
+      final categoryId = await _findOrCreateCategory(categoryName);
+      await (_db.update(
+        _db.products,
+      )..where((p) => p.id.equals(productId))).write(
+        ProductsCompanion(
+          name: Value(cleanName),
+          unit: Value(unit.trim()),
+          categoryId: Value(categoryId),
+        ),
+      );
+
+      final current = {
+        for (final c
+            in await (_db.select(
+              _db.currentSupplierPrices,
+            )..where((c) => c.productId.equals(productId))).get())
+          c.supplierId: c.unitPrice,
+      };
+      for (final e in supplyPrices.entries) {
+        if (!current.containsKey(e.key)) {
+          throw ArgumentError('Supplier tidak terdaftar untuk produk ini');
+        }
+        if (current[e.key] != e.value) {
+          await recordSupplierPrice(productId, e.key, e.value);
+        }
+      }
+    });
+  }
+
+  /// Sets the unit of many products at once. Returns how many actually
+  /// changed: products that already have that unit are left alone, so they are
+  /// not marked as changed and re-published for nothing.
+  Future<int> setUnitForMany(Iterable<String> productIds, String unit) {
+    final u = unit.trim();
+    if (u.isEmpty) throw ArgumentError('Satuan wajib diisi');
+    return _updateMany(
+      productIds,
+      set: 'unit = ?',
+      differs: 'unit <> ?',
+      value: Variable.withString(u),
+    );
+  }
+
+  /// Sets (or, when [categoryName] is blank, clears) the category of many
+  /// products at once. Returns how many actually changed.
+  Future<int> setCategoryForMany(
+    Iterable<String> productIds,
+    String? categoryName,
+  ) {
+    return _db.transaction(() async {
+      final categoryId = await _findOrCreateCategory(categoryName);
+      return _updateMany(
+        productIds,
+        set: 'category_id = ?',
+        differs: 'category_id IS NOT ?',
+        value: Variable<String>(categoryId),
+      );
+    });
+  }
+
+  /// Archived products are never touched. Ids go in chunks because SQLite
+  /// limits the number of variables in one statement.
+  Future<int> _updateMany(
+    Iterable<String> productIds, {
+    required String set,
+    required String differs,
+    required Variable<Object> value,
+  }) async {
+    final ids = productIds.toSet().toList();
+    var changed = 0;
+    await _db.transaction(() async {
+      for (var i = 0; i < ids.length; i += 500) {
+        final chunk = ids.sublist(i, (i + 500).clamp(0, ids.length));
+        final marks = List.filled(chunk.length, '?').join(', ');
+        changed += await _db.customUpdate(
+          'UPDATE products SET $set WHERE deleted_at IS NULL AND $differs '
+          'AND id IN ($marks)',
+          variables: [value, value, for (final id in chunk) Variable.withString(id)],
+          updates: {_db.products},
+        );
+      }
+    });
+    return changed;
   }
 
   /// The owner's own retail price. Marks the product as an override, so it is

@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import '../products/add_product_screen.dart';
 import '../backup/backup_screen.dart';
 import '../products/archived_products_screen.dart';
+import '../products/edit_product_screen.dart';
 import '../products/product_detail_screen.dart';
 import '../products/product_list_screen.dart';
 import '../review/review_screen.dart';
@@ -41,6 +42,13 @@ final appRouter = GoRouter(
       path: '/produk/:id',
       builder: (_, state) =>
           ProductDetailScreen(productId: state.pathParameters['id']!),
+      routes: [
+        GoRoute(
+          path: 'ubah',
+          builder: (_, state) =>
+              EditProductScreen(productId: state.pathParameters['id']!),
+        ),
+      ],
     ),
   ],
 );

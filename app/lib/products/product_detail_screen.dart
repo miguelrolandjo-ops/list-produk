@@ -108,6 +108,11 @@ class ProductDetailScreen extends ConsumerWidget {
         title: const Text('Detail produk'),
         actions: [
           IconButton(
+            tooltip: 'Ubah produk',
+            icon: const Icon(Icons.edit_note),
+            onPressed: () => context.push('/produk/$productId/ubah'),
+          ),
+          IconButton(
             tooltip: 'Arsipkan',
             icon: const Icon(Icons.archive_outlined),
             onPressed: () => _archive(context, ref),
