@@ -125,6 +125,15 @@ adjustable by range, with the ability to override individual products.
   - 65,000 – 400,000 → warn below 15%
   - > 400,000 → warn below 20%
 - Products below threshold are flagged after a new PO raises supply price.
+- The margin is checked against the **latest PO price** of the product (the most
+  recent supplier price recorded for it, from any supplier), not against the
+  highest supplier price. This is separate from the price that drives the retail
+  price (`settings.basis`, default highest).
+- Optional setting (Batas margin screen): use the **average of the last N PO
+  prices** instead (N from 2 to 20, default 3; the mean of the last N recorded
+  supplier prices of the product, any supplier, rounded to a whole Rupiah).
+  Stored as `settings.margin_basis` (`latest` or `average`) and
+  `settings.margin_avg_count`.
 
 ### Overrides & recalculation
 - Retail price is shown next to supply price(s) in the owner view.

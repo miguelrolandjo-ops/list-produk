@@ -19,3 +19,17 @@ int? pickBasisSupply(
       return prices.map((r) => r.unitPrice).reduce((a, b) => a > b ? a : b);
   }
 }
+
+/// The supply price a product's margin warning is judged against.
+///
+/// [newestFirst] are the product's recorded supply prices, newest first (any
+/// supplier). [basis] is settings.margin_basis: 'latest' uses the newest
+/// price; 'average' uses the mean of the newest [count] prices, rounded to a
+/// whole Rupiah (with fewer than [count] prices, the mean of those it has).
+/// Returns null when there are no prices.
+int? pickMarginSupply(String basis, int count, List<int> newestFirst) {
+  if (newestFirst.isEmpty) return null;
+  if (basis != 'average') return newestFirst.first;
+  final used = newestFirst.take(count < 1 ? 1 : count).toList();
+  return (used.fold<int>(0, (sum, p) => sum + p) / used.length).round();
+}

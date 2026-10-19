@@ -13,7 +13,7 @@ class OwnerDatabase extends _$OwnerDatabase {
   // Bump this and add an onUpgrade step for every schema change.
   // Real data lives on the owner's phone, so reinstalling is never an option.
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -22,6 +22,21 @@ class OwnerDatabase extends _$OwnerDatabase {
     onCreate: (m) async {
       await m.createAll();
       await _seedDefaults();
+    },
+    onUpgrade: (m, from, to) async {
+      // Each step must keep existing data: the owner's phone holds the real
+      // catalog, so reinstalling is never an option.
+      if (from < 2) {
+        // Margin warning basis (separate from the retail basis).
+        await customStatement(
+          "ALTER TABLE settings ADD COLUMN margin_basis TEXT NOT NULL "
+          "DEFAULT 'latest' CHECK (margin_basis IN ('latest', 'average'))",
+        );
+        await customStatement(
+          'ALTER TABLE settings ADD COLUMN margin_avg_count INTEGER NOT NULL '
+          'DEFAULT 3 CHECK (margin_avg_count BETWEEN 2 AND 20)',
+        );
+      }
     },
   );
 

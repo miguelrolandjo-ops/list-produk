@@ -85,6 +85,31 @@ class Settings extends Table with TableInfo<Settings, Setting> {
     requiredDuringInsert: false,
     $customConstraints: '',
   );
+  static const VerificationMeta _marginBasisMeta = const VerificationMeta(
+    'marginBasis',
+  );
+  late final GeneratedColumn<String> marginBasis = GeneratedColumn<String>(
+    'margin_basis',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    $customConstraints: 'NOT NULL DEFAULT \'latest\' CHECK (margin_basis IN (\'latest\', \'average\'))',
+    defaultValue: const CustomExpression('\'latest\''),
+  );
+  static const VerificationMeta _marginAvgCountMeta = const VerificationMeta(
+    'marginAvgCount',
+  );
+  late final GeneratedColumn<int> marginAvgCount = GeneratedColumn<int>(
+    'margin_avg_count',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    $customConstraints:
+        'NOT NULL DEFAULT 3 CHECK (margin_avg_count BETWEEN 2 AND 20)',
+    defaultValue: const CustomExpression('3'),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -94,6 +119,8 @@ class Settings extends Table with TableInfo<Settings, Setting> {
     aboveMarkupPct,
     basis,
     lastBackupAt,
+    marginBasis,
+    marginAvgCount,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -152,6 +179,24 @@ class Settings extends Table with TableInfo<Settings, Setting> {
         ),
       );
     }
+    if (data.containsKey('margin_basis')) {
+      context.handle(
+        _marginBasisMeta,
+        marginBasis.isAcceptableOrUnknown(
+          data['margin_basis']!,
+          _marginBasisMeta,
+        ),
+      );
+    }
+    if (data.containsKey('margin_avg_count')) {
+      context.handle(
+        _marginAvgCountMeta,
+        marginAvgCount.isAcceptableOrUnknown(
+          data['margin_avg_count']!,
+          _marginAvgCountMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -189,6 +234,14 @@ class Settings extends Table with TableInfo<Settings, Setting> {
         DriftSqlType.string,
         data['${effectivePrefix}last_backup_at'],
       ),
+      marginBasis: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}margin_basis'],
+      )!,
+      marginAvgCount: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}margin_avg_count'],
+      )!,
     );
   }
 
@@ -211,6 +264,11 @@ class Setting extends DataClass implements Insertable<Setting> {
   final double aboveMarkupPct;
   final String basis;
   final String? lastBackupAt;
+
+  /// Which supply price the margin warning uses (not the retail basis above):
+  /// the product's latest PO price, or the average of its last N PO prices.
+  final String marginBasis;
+  final int marginAvgCount;
   const Setting({
     required this.id,
     this.storeId,
@@ -219,6 +277,8 @@ class Setting extends DataClass implements Insertable<Setting> {
     required this.aboveMarkupPct,
     required this.basis,
     this.lastBackupAt,
+    required this.marginBasis,
+    required this.marginAvgCount,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -234,6 +294,8 @@ class Setting extends DataClass implements Insertable<Setting> {
     if (!nullToAbsent || lastBackupAt != null) {
       map['last_backup_at'] = Variable<String>(lastBackupAt);
     }
+    map['margin_basis'] = Variable<String>(marginBasis);
+    map['margin_avg_count'] = Variable<int>(marginAvgCount);
     return map;
   }
 
@@ -250,6 +312,8 @@ class Setting extends DataClass implements Insertable<Setting> {
       lastBackupAt: lastBackupAt == null && nullToAbsent
           ? const Value.absent()
           : Value(lastBackupAt),
+      marginBasis: Value(marginBasis),
+      marginAvgCount: Value(marginAvgCount),
     );
   }
 
@@ -266,6 +330,8 @@ class Setting extends DataClass implements Insertable<Setting> {
       aboveMarkupPct: serializer.fromJson<double>(json['above_markup_pct']),
       basis: serializer.fromJson<String>(json['basis']),
       lastBackupAt: serializer.fromJson<String?>(json['last_backup_at']),
+      marginBasis: serializer.fromJson<String>(json['margin_basis']),
+      marginAvgCount: serializer.fromJson<int>(json['margin_avg_count']),
     );
   }
   @override
@@ -279,6 +345,8 @@ class Setting extends DataClass implements Insertable<Setting> {
       'above_markup_pct': serializer.toJson<double>(aboveMarkupPct),
       'basis': serializer.toJson<String>(basis),
       'last_backup_at': serializer.toJson<String?>(lastBackupAt),
+      'margin_basis': serializer.toJson<String>(marginBasis),
+      'margin_avg_count': serializer.toJson<int>(marginAvgCount),
     };
   }
 
@@ -290,6 +358,8 @@ class Setting extends DataClass implements Insertable<Setting> {
     double? aboveMarkupPct,
     String? basis,
     Value<String?> lastBackupAt = const Value.absent(),
+    String? marginBasis,
+    int? marginAvgCount,
   }) => Setting(
     id: id ?? this.id,
     storeId: storeId.present ? storeId.value : this.storeId,
@@ -298,6 +368,8 @@ class Setting extends DataClass implements Insertable<Setting> {
     aboveMarkupPct: aboveMarkupPct ?? this.aboveMarkupPct,
     basis: basis ?? this.basis,
     lastBackupAt: lastBackupAt.present ? lastBackupAt.value : this.lastBackupAt,
+    marginBasis: marginBasis ?? this.marginBasis,
+    marginAvgCount: marginAvgCount ?? this.marginAvgCount,
   );
   Setting copyWithCompanion(SettingsCompanion data) {
     return Setting(
@@ -312,6 +384,12 @@ class Setting extends DataClass implements Insertable<Setting> {
       lastBackupAt: data.lastBackupAt.present
           ? data.lastBackupAt.value
           : this.lastBackupAt,
+      marginBasis: data.marginBasis.present
+          ? data.marginBasis.value
+          : this.marginBasis,
+      marginAvgCount: data.marginAvgCount.present
+          ? data.marginAvgCount.value
+          : this.marginAvgCount,
     );
   }
 
@@ -324,7 +402,9 @@ class Setting extends DataClass implements Insertable<Setting> {
           ..write('roundTo: $roundTo, ')
           ..write('aboveMarkupPct: $aboveMarkupPct, ')
           ..write('basis: $basis, ')
-          ..write('lastBackupAt: $lastBackupAt')
+          ..write('lastBackupAt: $lastBackupAt, ')
+          ..write('marginBasis: $marginBasis, ')
+          ..write('marginAvgCount: $marginAvgCount')
           ..write(')'))
         .toString();
   }
@@ -338,6 +418,8 @@ class Setting extends DataClass implements Insertable<Setting> {
     aboveMarkupPct,
     basis,
     lastBackupAt,
+    marginBasis,
+    marginAvgCount,
   );
   @override
   bool operator ==(Object other) =>
@@ -349,7 +431,9 @@ class Setting extends DataClass implements Insertable<Setting> {
           other.roundTo == this.roundTo &&
           other.aboveMarkupPct == this.aboveMarkupPct &&
           other.basis == this.basis &&
-          other.lastBackupAt == this.lastBackupAt);
+          other.lastBackupAt == this.lastBackupAt &&
+          other.marginBasis == this.marginBasis &&
+          other.marginAvgCount == this.marginAvgCount);
 }
 
 class SettingsCompanion extends UpdateCompanion<Setting> {
@@ -360,6 +444,8 @@ class SettingsCompanion extends UpdateCompanion<Setting> {
   final Value<double> aboveMarkupPct;
   final Value<String> basis;
   final Value<String?> lastBackupAt;
+  final Value<String> marginBasis;
+  final Value<int> marginAvgCount;
   const SettingsCompanion({
     this.id = const Value.absent(),
     this.storeId = const Value.absent(),
@@ -368,6 +454,8 @@ class SettingsCompanion extends UpdateCompanion<Setting> {
     this.aboveMarkupPct = const Value.absent(),
     this.basis = const Value.absent(),
     this.lastBackupAt = const Value.absent(),
+    this.marginBasis = const Value.absent(),
+    this.marginAvgCount = const Value.absent(),
   });
   SettingsCompanion.insert({
     this.id = const Value.absent(),
@@ -377,6 +465,8 @@ class SettingsCompanion extends UpdateCompanion<Setting> {
     this.aboveMarkupPct = const Value.absent(),
     this.basis = const Value.absent(),
     this.lastBackupAt = const Value.absent(),
+    this.marginBasis = const Value.absent(),
+    this.marginAvgCount = const Value.absent(),
   });
   static Insertable<Setting> custom({
     Expression<int>? id,
@@ -386,6 +476,8 @@ class SettingsCompanion extends UpdateCompanion<Setting> {
     Expression<double>? aboveMarkupPct,
     Expression<String>? basis,
     Expression<String>? lastBackupAt,
+    Expression<String>? marginBasis,
+    Expression<int>? marginAvgCount,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -395,6 +487,8 @@ class SettingsCompanion extends UpdateCompanion<Setting> {
       if (aboveMarkupPct != null) 'above_markup_pct': aboveMarkupPct,
       if (basis != null) 'basis': basis,
       if (lastBackupAt != null) 'last_backup_at': lastBackupAt,
+      if (marginBasis != null) 'margin_basis': marginBasis,
+      if (marginAvgCount != null) 'margin_avg_count': marginAvgCount,
     });
   }
 
@@ -406,6 +500,8 @@ class SettingsCompanion extends UpdateCompanion<Setting> {
     Value<double>? aboveMarkupPct,
     Value<String>? basis,
     Value<String?>? lastBackupAt,
+    Value<String>? marginBasis,
+    Value<int>? marginAvgCount,
   }) {
     return SettingsCompanion(
       id: id ?? this.id,
@@ -415,6 +511,8 @@ class SettingsCompanion extends UpdateCompanion<Setting> {
       aboveMarkupPct: aboveMarkupPct ?? this.aboveMarkupPct,
       basis: basis ?? this.basis,
       lastBackupAt: lastBackupAt ?? this.lastBackupAt,
+      marginBasis: marginBasis ?? this.marginBasis,
+      marginAvgCount: marginAvgCount ?? this.marginAvgCount,
     );
   }
 
@@ -442,6 +540,12 @@ class SettingsCompanion extends UpdateCompanion<Setting> {
     if (lastBackupAt.present) {
       map['last_backup_at'] = Variable<String>(lastBackupAt.value);
     }
+    if (marginBasis.present) {
+      map['margin_basis'] = Variable<String>(marginBasis.value);
+    }
+    if (marginAvgCount.present) {
+      map['margin_avg_count'] = Variable<int>(marginAvgCount.value);
+    }
     return map;
   }
 
@@ -454,7 +558,9 @@ class SettingsCompanion extends UpdateCompanion<Setting> {
           ..write('roundTo: $roundTo, ')
           ..write('aboveMarkupPct: $aboveMarkupPct, ')
           ..write('basis: $basis, ')
-          ..write('lastBackupAt: $lastBackupAt')
+          ..write('lastBackupAt: $lastBackupAt, ')
+          ..write('marginBasis: $marginBasis, ')
+          ..write('marginAvgCount: $marginAvgCount')
           ..write(')'))
         .toString();
   }
@@ -5183,6 +5289,8 @@ typedef $SettingsCreateCompanionBuilder = SettingsCompanion Function({
   Value<double> aboveMarkupPct,
   Value<String> basis,
   Value<String?> lastBackupAt,
+  Value<String> marginBasis,
+  Value<int> marginAvgCount,
 });
 typedef $SettingsUpdateCompanionBuilder = SettingsCompanion Function({
   Value<int> id,
@@ -5192,6 +5300,8 @@ typedef $SettingsUpdateCompanionBuilder = SettingsCompanion Function({
   Value<double> aboveMarkupPct,
   Value<String> basis,
   Value<String?> lastBackupAt,
+  Value<String> marginBasis,
+  Value<int> marginAvgCount,
 });
 
 class $SettingsFilterComposer extends Composer<_$OwnerDatabase, Settings> {
@@ -5234,6 +5344,16 @@ class $SettingsFilterComposer extends Composer<_$OwnerDatabase, Settings> {
 
   ColumnFilters<String> get lastBackupAt => $composableBuilder(
     column: $table.lastBackupAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get marginBasis => $composableBuilder(
+    column: $table.marginBasis,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get marginAvgCount => $composableBuilder(
+    column: $table.marginAvgCount,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -5280,6 +5400,16 @@ class $SettingsOrderingComposer extends Composer<_$OwnerDatabase, Settings> {
     column: $table.lastBackupAt,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get marginBasis => $composableBuilder(
+    column: $table.marginBasis,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get marginAvgCount => $composableBuilder(
+    column: $table.marginAvgCount,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $SettingsAnnotationComposer extends Composer<_$OwnerDatabase, Settings> {
@@ -5312,6 +5442,16 @@ class $SettingsAnnotationComposer extends Composer<_$OwnerDatabase, Settings> {
 
   GeneratedColumn<String> get lastBackupAt => $composableBuilder(
     column: $table.lastBackupAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get marginBasis => $composableBuilder(
+    column: $table.marginBasis,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get marginAvgCount => $composableBuilder(
+    column: $table.marginAvgCount,
     builder: (column) => column,
   );
 }
@@ -5351,6 +5491,8 @@ class $SettingsTableManager
                 Value<double> aboveMarkupPct = const Value.absent(),
                 Value<String> basis = const Value.absent(),
                 Value<String?> lastBackupAt = const Value.absent(),
+                Value<String> marginBasis = const Value.absent(),
+                Value<int> marginAvgCount = const Value.absent(),
               }) => SettingsCompanion(
                 id: id,
                 storeId: storeId,
@@ -5359,6 +5501,8 @@ class $SettingsTableManager
                 aboveMarkupPct: aboveMarkupPct,
                 basis: basis,
                 lastBackupAt: lastBackupAt,
+                marginBasis: marginBasis,
+                marginAvgCount: marginAvgCount,
               ),
           createCompanionCallback:
               ({
@@ -5369,6 +5513,8 @@ class $SettingsTableManager
                 Value<double> aboveMarkupPct = const Value.absent(),
                 Value<String> basis = const Value.absent(),
                 Value<String?> lastBackupAt = const Value.absent(),
+                Value<String> marginBasis = const Value.absent(),
+                Value<int> marginAvgCount = const Value.absent(),
               }) => SettingsCompanion.insert(
                 id: id,
                 storeId: storeId,
@@ -5377,6 +5523,8 @@ class $SettingsTableManager
                 aboveMarkupPct: aboveMarkupPct,
                 basis: basis,
                 lastBackupAt: lastBackupAt,
+                marginBasis: marginBasis,
+                marginAvgCount: marginAvgCount,
               ),
           withReferenceMapper: (p0) => p0
               .map(

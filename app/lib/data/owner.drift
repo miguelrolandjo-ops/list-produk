@@ -10,7 +10,13 @@ CREATE TABLE settings (
   above_markup_pct  REAL    NOT NULL DEFAULT 30,
   basis             TEXT    NOT NULL DEFAULT 'highest'
                     CHECK (basis IN ('highest', 'lowest', 'latest')),
-  last_backup_at    TEXT
+  last_backup_at    TEXT,
+  -- Which supply price the margin warning uses (not the retail basis above):
+  -- the product's latest PO price, or the average of its last N PO prices.
+  margin_basis      TEXT    NOT NULL DEFAULT 'latest'
+                    CHECK (margin_basis IN ('latest', 'average')),
+  margin_avg_count  INTEGER NOT NULL DEFAULT 3
+                    CHECK (margin_avg_count BETWEEN 2 AND 20)
 );
 
 CREATE TABLE pricing_anchors (

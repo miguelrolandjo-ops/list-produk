@@ -23,6 +23,11 @@ class _MarginLimitsScreenState extends ConsumerState<MarginLimitsScreen> {
   List<MarginLimit>? _saved;
   List<MarginLimit> _limits = [];
 
+  // Which supply price the warning uses (settings.margin_basis).
+  ({String basis, int count}) _savedBasis = (basis: 'latest', count: 3);
+  String _basis = 'latest';
+  int _count = 3;
+
   @override
   void initState() {
     super.initState();
@@ -30,16 +35,25 @@ class _MarginLimitsScreenState extends ConsumerState<MarginLimitsScreen> {
   }
 
   Future<void> _load() async {
-    final loaded = await ref.read(marginServiceProvider).load();
+    final service = ref.read(marginServiceProvider);
+    final loaded = await service.load();
+    final basis = await service.loadBasis();
     if (!mounted) return;
     setState(() {
       _saved = loaded;
       _limits = [...loaded];
+      _savedBasis = basis;
+      _basis = basis.basis;
+      _count = basis.count;
     });
   }
 
   String? get _error => MarginService.validate(_limits);
-  bool get _dirty => _saved != null && _limits.toString() != _saved.toString();
+  bool get _dirty =>
+      _saved != null &&
+      (_limits.toString() != _saved.toString() ||
+          _basis != _savedBasis.basis ||
+          _count != _savedBasis.count);
 
   Future<void> _edit(int index) async {
     final isLast = index == _limits.length - 1;
@@ -82,11 +96,13 @@ class _MarginLimitsScreenState extends ConsumerState<MarginLimitsScreen> {
   }
 
   Future<void> _save() async {
-    await ref.read(marginServiceProvider).save(_limits);
+    final service = ref.read(marginServiceProvider);
+    await service.saveBasis(_basis, _count);
+    await service.save(_limits);
     await _load();
     if (!mounted) return;
     ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('Batas margin disimpan')));
+        .showSnackBar(const SnackBar(content: Text('Pengaturan margin disimpan')));
   }
 
   String _label(int index) {
@@ -108,7 +124,7 @@ class _MarginLimitsScreenState extends ConsumerState<MarginLimitsScreen> {
           context: context,
           builder: (context) => AlertDialog(
             title: const Text('Buang perubahan?'),
-            content: const Text('Perubahan batas margin belum disimpan.'),
+            content: const Text('Perubahan pengaturan margin belum disimpan.'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
@@ -148,6 +164,13 @@ class _MarginLimitsScreenState extends ConsumerState<MarginLimitsScreen> {
                   Expanded(
                     child: ListView(
                       children: [
+                        _BasisSection(
+                          basis: _basis,
+                          count: _count,
+                          onBasis: (b) => setState(() => _basis = b),
+                          onCount: (c) => setState(() => _count = c),
+                        ),
+                        const Divider(height: 1),
                         for (var i = 0; i < _limits.length; i++)
                           ListTile(
                             onTap: () => _edit(i),
@@ -197,6 +220,70 @@ class _MarginLimitsScreenState extends ConsumerState<MarginLimitsScreen> {
                   ),
                 ],
               ),
+      ),
+    );
+  }
+}
+
+/// Which supply price the margin is checked against. This only affects the
+/// warning; the retail price keeps using its own basis (Aturan harga).
+class _BasisSection extends StatelessWidget {
+  const _BasisSection({
+    required this.basis,
+    required this.count,
+    required this.onBasis,
+    required this.onCount,
+  });
+
+  final String basis;
+  final int count;
+  final ValueChanged<String> onBasis;
+  final ValueChanged<int> onCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Harga supplier untuk cek margin', style: theme.textTheme.titleSmall),
+          const SizedBox(height: 8),
+          SegmentedButton<String>(
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment(value: 'latest', label: Text('PO terakhir')),
+              ButtonSegment(value: 'average', label: Text('Rata-rata')),
+            ],
+            selected: {basis},
+            onSelectionChanged: (v) => onBasis(v.first),
+          ),
+          const SizedBox(height: 8),
+          if (basis == 'average')
+            Row(
+              children: [
+                Expanded(child: Text('Rata-rata dari $count PO terakhir')),
+                IconButton(
+                  tooltip: 'Kurangi',
+                  icon: const Icon(Icons.remove_circle_outline),
+                  onPressed: count > 2 ? () => onCount(count - 1) : null,
+                ),
+                IconButton(
+                  tooltip: 'Tambah',
+                  icon: const Icon(Icons.add_circle_outline),
+                  onPressed: count < 20 ? () => onCount(count + 1) : null,
+                ),
+              ],
+            )
+          else
+            const Text('Harga dari PO terbaru produk ini, dari supplier mana pun.'),
+          Text(
+            'Hanya memengaruhi peringatan margin. Harga jual tetap dihitung '
+            'dari aturan harga.',
+            style: theme.textTheme.bodySmall,
+          ),
+        ],
       ),
     );
   }

@@ -2,7 +2,6 @@ import 'package:drift/drift.dart';
 
 import '../data/owner_database.dart';
 import '../products/product_service.dart';
-import 'basis.dart';
 import 'margin.dart';
 
 /// One row of the margin screen: margin limit for supply prices below
@@ -73,28 +72,39 @@ class MarginService {
     });
   }
 
+  /// Which supply price the margin warning uses: 'latest' or 'average', and
+  /// the number of POs averaged. Separate from the retail price basis.
+  Future<({String basis, int count})> loadBasis() async {
+    final s = await (_db.select(
+      _db.settings,
+    )..where((s) => s.id.equals(1))).getSingle();
+    return (basis: s.marginBasis, count: s.marginAvgCount);
+  }
+
+  Future<void> saveBasis(String basis, int count) async {
+    if (basis != 'latest' && basis != 'average') {
+      throw ArgumentError('Dasar margin tidak dikenal');
+    }
+    if (count < 2 || count > 20) {
+      throw ArgumentError('Jumlah PO harus antara 2 dan 20');
+    }
+    await (_db.update(_db.settings)..where((s) => s.id.equals(1))).write(
+      SettingsCompanion(marginBasis: Value(basis), marginAvgCount: Value(count)),
+    );
+  }
+
   /// Ids of products whose margin is below the limit for their supply range.
   Future<Set<String>> productsBelowMargin() async {
     final ranges = await _products.marginThresholds();
     if (ranges.isEmpty) return {};
-    final basis = (await (_db.select(
-      _db.settings,
-    )..where((s) => s.id.equals(1))).getSingle()).basis;
-
-    final byProduct = <String, List<({int unitPrice, String observedAt})>>{};
-    for (final c in await _db.select(_db.currentSupplierPrices).get()) {
-      (byProduct[c.productId] ??= []).add((
-        unitPrice: c.unitPrice,
-        observedAt: c.observedAt,
-      ));
-    }
+    final supplyByProduct = await _products.marginSupplyPrices();
     final products = await (_db.select(
       _db.products,
     )..where((p) => p.deletedAt.isNull() & p.retailPrice.isNotNull())).get();
 
     final flagged = <String>{};
     for (final p in products) {
-      final supply = pickBasisSupply(basis, byProduct[p.id] ?? const []);
+      final supply = supplyByProduct[p.id];
       if (supply != null && isBelowMargin(supply, p.retailPrice, ranges)) {
         flagged.add(p.id!);
       }

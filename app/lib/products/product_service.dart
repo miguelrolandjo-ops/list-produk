@@ -55,6 +55,9 @@ class ProductDetail {
     required this.categoryName,
     required this.basis,
     required this.basisSupply,
+    required this.marginSupply,
+    required this.marginBasis,
+    required this.marginAvgCount,
     required this.minMarginPct,
     required this.currentPrices,
   });
@@ -68,7 +71,15 @@ class ProductDetail {
   /// The supply price the retail price is based on, if any.
   final int? basisSupply;
 
-  /// Margin limit for that supply price, or null if none applies.
+  /// The supply price the margin warning uses (settings.margin_basis), which
+  /// is not necessarily [basisSupply]. Null if the product has no prices.
+  final int? marginSupply;
+
+  /// settings.margin_basis ('latest' or 'average') and the N for 'average'.
+  final String marginBasis;
+  final int marginAvgCount;
+
+  /// Margin limit for [marginSupply], or null if none applies.
   final double? minMarginPct;
   final List<SupplierPriceEntry> currentPrices;
 }
@@ -302,15 +313,20 @@ class ProductService {
             .get();
     final settings = await _settings();
     final basisSupply = await _basisSupply(productId, settings);
+    final marginSupply =
+        (await marginSupplyPrices(productId: productId))[productId];
 
     return ProductDetail(
       product: product,
       categoryName: category?.name,
       basis: settings.basis,
       basisSupply: basisSupply,
-      minMarginPct: basisSupply == null
+      marginSupply: marginSupply,
+      marginBasis: settings.marginBasis,
+      marginAvgCount: settings.marginAvgCount,
+      minMarginPct: marginSupply == null
           ? null
-          : minMarginFor(basisSupply, await marginThresholds()),
+          : minMarginFor(marginSupply, await marginThresholds()),
       currentPrices: [
         for (final c in current)
           SupplierPriceEntry(
@@ -492,6 +508,36 @@ class ProductService {
           .write(const ProductsCompanion(deletedAt: Value(null)));
       await recalcRetail(productId);
     });
+  }
+
+  /// The supply price each product's margin is judged against, per
+  /// settings.margin_basis: its latest PO price, or the average of its last N.
+  /// Products without any supplier price are absent from the map. Pass
+  /// [productId] to look at one product only.
+  Future<Map<String, int>> marginSupplyPrices({String? productId}) async {
+    final s = await _settings();
+    final n = s.marginBasis == 'average' ? s.marginAvgCount : 1;
+    final rows = await _db
+        .customSelect(
+          'SELECT product_id, unit_price FROM ('
+          ' SELECT product_id, unit_price, ROW_NUMBER() OVER ('
+          '  PARTITION BY product_id ORDER BY observed_at DESC, rowid DESC'
+          ' ) AS rn FROM supplier_prices WHERE (?1 IS NULL OR product_id = ?1)'
+          ') WHERE rn <= ?2 ORDER BY product_id, rn',
+          variables: [Variable<String>(productId), Variable.withInt(n)],
+          readsFrom: {_db.supplierPrices},
+        )
+        .get();
+    final byProduct = <String, List<int>>{};
+    for (final r in rows) {
+      (byProduct[r.read<String>('product_id')] ??= []).add(
+        r.read<int>('unit_price'),
+      );
+    }
+    return {
+      for (final e in byProduct.entries)
+        e.key: pickMarginSupply(s.marginBasis, s.marginAvgCount, e.value)!,
+    };
   }
 
   Future<Setting> _settings() =>

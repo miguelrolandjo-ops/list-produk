@@ -21,6 +21,10 @@ const _basisLabel = {
   'latest': 'terbaru',
 };
 
+String _marginBasisLabel(ProductDetail d) => d.marginBasis == 'average'
+    ? 'rata-rata ${d.marginAvgCount} PO terakhir'
+    : 'harga PO terakhir';
+
 class ProductDetailScreen extends ConsumerWidget {
   const ProductDetailScreen({super.key, required this.productId});
 
@@ -229,7 +233,7 @@ class _Body extends StatelessWidget {
     final theme = Theme.of(context);
     final p = detail.product;
     final retail = p.retailPrice;
-    final supply = detail.basisSupply;
+    final supply = detail.marginSupply;
     final margin = supply == null ? null : marginPct(supply, retail);
     final limit = detail.minMarginPct;
     final belowLimit = margin != null && limit != null && margin < limit;
@@ -290,6 +294,15 @@ class _Body extends StatelessWidget {
                                 ),
                               ),
                             ],
+                          ),
+                        ),
+                      if (supply != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            'Margin dari ${_marginBasisLabel(detail)} '
+                            '${formatRupiah(supply)}',
+                            style: theme.textTheme.bodySmall,
                           ),
                         ),
                       const SizedBox(height: 4),
