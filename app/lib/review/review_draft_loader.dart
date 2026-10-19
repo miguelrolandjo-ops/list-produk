@@ -74,6 +74,13 @@ class ReviewDraftLoader {
         .customSelect('SELECT name FROM categories ORDER BY name COLLATE NOCASE')
         .get();
 
+    final productRows = await _db
+        .customSelect(
+          'SELECT id, name, model FROM products WHERE deleted_at IS NULL '
+          'ORDER BY name COLLATE NOCASE',
+        )
+        .get();
+
     final date = po.readNullable<String>('po_date');
     return ReviewDraft(
       poId: poId,
@@ -85,6 +92,15 @@ class ReviewDraftLoader {
       },
       poDate: date == null ? null : DateTime.parse('${date}T00:00:00Z'),
       categoryOptions: [for (final c in categories) c.read<String>('name')],
+      productOptions: [
+        for (final r in productRows)
+          ProductOption(
+            id: r.read<String>('id'),
+            name: r.read<String>('name'),
+            model: r.readNullable<String>('model'),
+            supplierPrice: known[r.read<String>('id')],
+          ),
+      ],
       lines: [for (final r in lineRows) _line(r, known, suggester)],
     );
   }

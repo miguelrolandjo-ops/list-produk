@@ -476,4 +476,155 @@ void main() {
       expect(await categoryOf('Kbl Type C 100cm'), isNull); // no suggestion
     });
   });
+
+  group('link a line to a product by hand', () {
+    const kabel = ProductOption(id: 'p1', name: 'Kabel USB-C', model: '1M', supplierPrice: 9500);
+    const charger = ProductOption(id: 'p2', name: 'Charger Fast 20W');
+
+    test('ProductOption.matches needs every word, in name or model', () {
+      expect(kabel.matches(''), isTrue);
+      expect(kabel.matches('kabel c'), isTrue);
+      expect(kabel.matches('usb 1m'), isTrue); // 1M is the model
+      expect(kabel.matches('kabel lightning'), isFalse);
+    });
+
+    test('a new line becomes linked to the picked product', () {
+      final d = draft([line('a')]).linkTo(0, kabel);
+      final l = d.lines[0];
+      expect(l.kind, DraftKind.linked);
+      expect(l.productId, 'p1');
+      expect(l.productName, 'Kabel USB-C');
+      expect(l.previousPrice, 9500);
+      expect(l.unitPrice, 9500); // the PO price is kept (9500 here)
+    });
+
+    test('a suggestion can be pointed at a different product', () {
+      final d = draft([line('a', kind: DraftKind.suggestion, productId: 'p9')])
+          .linkTo(0, charger);
+      expect(d.lines[0].kind, DraftKind.linked);
+      expect(d.lines[0].productId, 'p2');
+      expect(d.pendingSuggestions, 0);
+      expect(d.canSave, isTrue);
+    });
+
+    test('a price read from the PO is kept, the product price is only a reference', () {
+      final d = draft([line('a', price: 12000)]).linkTo(0, kabel);
+      expect(d.lines[0].unitPrice, 12000);
+      expect(d.lines[0].previousPrice, 9500);
+      expect(d.lines[0].priceFromCatalog, isFalse);
+    });
+
+    test('a missing price defaults to the product price, still highlighted', () {
+      final d = draft([line('a', price: null)]).linkTo(0, kabel);
+      expect(d.lines[0].unitPrice, 9500);
+      expect(d.lines[0].priceFromCatalog, isTrue);
+      expect(d.lines[0].hint, LineHint.priceFromCatalog);
+    });
+
+    test('a price borrowed from the old match follows the new product', () {
+      var d = draft([
+        const DraftLine(
+          poLineId: 'a',
+          rawName: 'Kabel',
+          kind: DraftKind.suggestion,
+          newName: 'Kabel',
+          productId: 'p9',
+          productName: 'Old',
+          unitPrice: 7000, // borrowed from p9's catalog price
+          priceFromCatalog: true,
+          previousPrice: 7000,
+        ),
+      ]);
+      d = d.linkTo(0, kabel);
+      expect(d.lines[0].unitPrice, 9500);
+      expect(d.lines[0].priceFromCatalog, isTrue);
+
+      // The new product has no known price for this supplier: nothing to borrow.
+      d = d.linkTo(0, charger);
+      expect(d.lines[0].unitPrice, isNull);
+      expect(d.lines[0].priceFromCatalog, isFalse);
+      expect(d.lines[0].hint, LineHint.priceMissing);
+    });
+
+    test('an ignored line stays ignored when linked', () {
+      final d = draft([line('a')]).toggleIgnore(0).linkTo(0, kabel);
+      expect(d.lines[0].ignored, isTrue);
+      expect(d.lines[0].kind, DraftKind.linked);
+    });
+
+    test('the link is what gets saved', () {
+      final po = draft([line('a')]).linkTo(0, kabel).toReviewedPo();
+      expect(po.lines.single.decision, LineDecision.link);
+      expect(po.lines.single.productId, 'p1');
+    });
+  });
+
+  group('link by hand with the database', () {
+    late OwnerDatabase db;
+    late ProductService products;
+    final sample = File('../shared/extraction_sample.json').readAsStringSync();
+
+    setUp(() {
+      db = OwnerDatabase(NativeDatabase.memory());
+      products = ProductService(db);
+    });
+    tearDown(() => db.close());
+
+    test('the loader offers every product with the price from this PO supplier', () async {
+      await products.addManual(
+        const NewProductInput(name: 'Kabel Roll', supplierName: 'CV Maju Elektrik', supplyPrice: 9500),
+      );
+      await products.addManual(
+        const NewProductInput(name: 'Adaptor', supplierName: 'Toko Lain', supplyPrice: 5000),
+      );
+      final gone = await products.addManual(
+        const NewProductInput(name: 'Dihapus', supplierName: 'CV Maju Elektrik', supplyPrice: 1000),
+      );
+      await products.deleteProduct(gone);
+      await db.customStatement(
+        "INSERT INTO purchase_orders (id, status, source) VALUES ('po1', 'processing', 'gallery')",
+      );
+      await PoImportService(db).importResult('po1', sample);
+
+      final d = await ReviewDraftLoader(db).load('po1');
+      expect(d.productOptions.map((o) => o.name), ['Adaptor', 'Kabel Roll']); // no deleted
+      final byName = {for (final o in d.productOptions) o.name: o.supplierPrice};
+      expect(byName['Kabel Roll'], 9500); // charged by this PO's supplier
+      expect(byName['Adaptor'], isNull); // another supplier's product
+    });
+
+    test('saving teaches the alias, so the next PO links by itself', () async {
+      final pid = await products.addManual(
+        const NewProductInput(name: 'Casing Silikon Premium', supplierName: 'CV Maju Elektrik', supplyPrice: 18000),
+      );
+      await db.customStatement(
+        "INSERT INTO purchase_orders (id, status, source) VALUES ('po1', 'processing', 'gallery')",
+      );
+      await PoImportService(db).importResult('po1', sample);
+      var d = await ReviewDraftLoader(db).load('po1');
+
+      // The matcher knew nothing about this line; the owner picks the product.
+      final i = d.lines.indexWhere((l) => l.rawName == 'Sarung HP Silikon');
+      expect(d.lines[i].kind, DraftKind.isNew);
+      final option = d.productOptions.singleWhere((o) => o.id == pid);
+      d = d.linkTo(i, option);
+      for (var k = 0; k < d.lines.length; k++) {
+        if (k != i) d = d.toggleIgnore(k);
+      }
+      await ReviewService(db, products).save(d.toReviewedPo());
+
+      await db.customStatement(
+        "INSERT INTO purchase_orders (id, status, source) VALUES ('po2', 'processing', 'gallery')",
+      );
+      await PoImportService(db).importResult('po2', sample);
+      final line = (await db
+              .customSelect(
+                "SELECT match_status, matched_product_id FROM po_lines "
+                "WHERE po_id = 'po2' AND raw_name = 'Sarung HP Silikon'",
+              )
+              .getSingle());
+      expect(line.read<String>('match_status'), 'auto');
+      expect(line.read<String>('matched_product_id'), pid);
+    });
+  });
 }

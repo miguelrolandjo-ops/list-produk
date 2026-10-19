@@ -198,4 +198,65 @@ void main() {
     expect(find.text('Produk baru · Aksesoris'), findsOneWidget);
     expect(find.textContaining('(saran)'), findsNothing);
   });
+
+  testWidgets('pick an existing product for a line by hand', (tester) async {
+    tester.view.physicalSize = const Size(800, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final db = OwnerDatabase(NativeDatabase.memory());
+    addTearDown(() => tester.runAsync(db.close));
+
+    late String poId;
+    await tester.runAsync(() async {
+      final service = ProductService(db);
+      for (final name in ['Casing Silikon Premium', 'Charger Mobil']) {
+        await service.addManual(
+          NewProductInput(name: name, supplierName: 'Toko Lama', supplyPrice: 18000),
+        );
+      }
+      poId = await seedSamplePo(db, PoImportService(db));
+    });
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [ownerDbProvider.overrideWithValue(db)],
+        child: MaterialApp(home: ReviewScreen(poId: poId)),
+      ),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 200)),
+    );
+    await tester.pump();
+
+    // The matcher left this line as a new product.
+    await tester.tap(find.text('Sarung HP Silikon'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pilih produk yang sudah ada'));
+    await tester.pumpAndSettle();
+
+    // Search narrows the list; nothing found says so.
+    expect(find.text('Casing Silikon Premium'), findsOneWidget);
+    expect(find.text('Charger Mobil'), findsOneWidget);
+    await tester.enterText(find.byType(TextField), 'casing sil');
+    await tester.pump();
+    expect(find.text('Charger Mobil'), findsNothing);
+    await tester.enterText(find.byType(TextField), 'zzz');
+    await tester.pump();
+    expect(find.text('Tidak ada produk yang cocok'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), 'casing');
+    await tester.pump();
+    await tester.tap(find.text('Casing Silikon Premium'));
+    await tester.pumpAndSettle();
+
+    // The line is linked now. Its price is still missing, so the row shows
+    // that warning; the menu proves the link: it now offers another product
+    // and a way back to "new product", instead of "pick an existing one".
+    await tester.tap(find.text('Sarung HP Silikon'));
+    await tester.pumpAndSettle();
+    expect(find.text('Pilih produk lain'), findsOneWidget);
+    expect(find.text('Bukan produk ini, buat produk baru'), findsOneWidget);
+    expect(find.text('Pilih produk yang sudah ada'), findsNothing);
+  });
 }

@@ -155,6 +155,15 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                 title: const Text('Ubah harga'),
                 onTap: () => Navigator.pop(context, _Action.price),
               ),
+              ListTile(
+                leading: const Icon(Icons.search),
+                title: Text(
+                  line.kind == DraftKind.isNew
+                      ? 'Pilih produk yang sudah ada'
+                      : 'Pilih produk lain',
+                ),
+                onTap: () => Navigator.pop(context, _Action.pick),
+              ),
               if (line.kind == DraftKind.isNew) ...[
                 ListTile(
                   leading: const Icon(Icons.drive_file_rename_outline),
@@ -189,6 +198,14 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
       case _Action.price:
         final price = await _askPrice(context, line.unitPrice);
         if (price != null) _edit((d) => d.setPrice(i, price));
+      case _Action.pick:
+        final product = await showModalBottomSheet<ProductOption>(
+          context: context,
+          isScrollControlled: true,
+          showDragHandle: true,
+          builder: (_) => _ProductPicker(options: _draft!.productOptions),
+        );
+        if (product != null) _edit((d) => d.linkTo(i, product));
       case _Action.rename:
         final name = await _askText(
           context,
@@ -211,7 +228,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
   }
 }
 
-enum _Action { price, rename, category, makeNew, toggleIgnore }
+enum _Action { price, pick, rename, category, makeNew, toggleIgnore }
 
 class _SupplierBox extends StatelessWidget {
   const _SupplierBox({required this.draft, required this.onEdit});
@@ -495,4 +512,74 @@ Future<String?> _askCategory(
       ],
     ),
   );
+}
+
+/// Search the existing products and pick one for a PO line. Every typed word
+/// must appear in the name or the model.
+class _ProductPicker extends StatefulWidget {
+  const _ProductPicker({required this.options});
+
+  final List<ProductOption> options;
+
+  @override
+  State<_ProductPicker> createState() => _ProductPickerState();
+}
+
+class _ProductPickerState extends State<_ProductPicker> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = [
+      for (final o in widget.options)
+        if (o.matches(_query)) o,
+    ];
+    return SafeArea(
+      child: Padding(
+        // Keep the list above the keyboard.
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: SizedBox(
+          height: MediaQuery.sizeOf(context).height * 0.7,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: TextField(
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.search),
+                    hintText: 'Cari nama atau model',
+                  ),
+                  onChanged: (v) => setState(() => _query = v),
+                ),
+              ),
+              Expanded(
+                child: shown.isEmpty
+                    ? const Center(child: Text('Tidak ada produk yang cocok'))
+                    : ListView.builder(
+                        itemCount: shown.length,
+                        itemBuilder: (context, i) {
+                          final o = shown[i];
+                          return ListTile(
+                            title: Text(o.name),
+                            subtitle: Text(
+                              [
+                                if (o.model != null) o.model!,
+                                if (o.supplierPrice != null)
+                                  'harga supplier ${groupThousands(o.supplierPrice!)}',
+                              ].join(' · '),
+                            ),
+                            onTap: () => Navigator.pop(context, o),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

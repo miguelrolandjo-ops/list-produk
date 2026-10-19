@@ -11,6 +11,33 @@ enum DraftKind { auto, suggestion, linked, isNew }
 
 enum LineHint { none, priceMissing, priceFromCatalog, priceUnclear, nameUnclear }
 
+/// An existing product the owner can pick for a line on the Review screen.
+class ProductOption {
+  const ProductOption({
+    required this.id,
+    required this.name,
+    this.model,
+    this.supplierPrice,
+  });
+
+  final String id;
+  final String name;
+  final String? model;
+
+  /// What this PO's supplier last charged for it, if known.
+  final int? supplierPrice;
+
+  /// Every typed word must appear in the name or the model (as in the list).
+  bool matches(String query) {
+    final text = '$name ${model ?? ''}'.toLowerCase();
+    return query
+        .toLowerCase()
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty)
+        .every(text.contains);
+  }
+}
+
 class DraftLine {
   const DraftLine({
     required this.poLineId,
@@ -142,6 +169,7 @@ class ReviewDraft {
     required this.knownSuppliers,
     required this.lines,
     this.categoryOptions = const [],
+    this.productOptions = const [],
     this.poDate,
     String? originalSupplierName,
   }) : originalSupplierName = originalSupplierName ?? supplierName;
@@ -159,6 +187,9 @@ class ReviewDraft {
 
   /// Existing category names, for the category picker.
   final List<String> categoryOptions;
+
+  /// Existing products, for linking a line by hand.
+  final List<ProductOption> productOptions;
   final DateTime? poDate;
   final List<DraftLine> lines;
 
@@ -205,6 +236,25 @@ class ReviewDraft {
         ? l.copyWith(kind: DraftKind.linked)
         : l,
   );
+
+  /// The owner picked [product] for this line by hand, whatever the matcher
+  /// thought. Works on any line (new, matched or suggested).
+  ///
+  /// A price that was only borrowed from the catalog follows the new product:
+  /// it becomes this product's price for the supplier, or empty if unknown.
+  /// A price read from the PO is kept, with the product's own as reference.
+  ReviewDraft linkTo(int i, ProductOption product) => _line(i, (l) {
+    final borrowed = l.priceFromCatalog && !l.priceChecked;
+    final known = product.supplierPrice;
+    return l.copyWith(
+      kind: DraftKind.linked,
+      productId: product.id,
+      productName: product.name,
+      previousPrice: known,
+      unitPrice: borrowed || l.unitPrice == null ? known : l.unitPrice,
+      priceFromCatalog: (borrowed || l.unitPrice == null) && known != null,
+    );
+  });
 
   /// ✗: not that product, so this line becomes a new product.
   ReviewDraft makeNew(int i) => _line(
@@ -304,6 +354,7 @@ class ReviewDraft {
         supplierConfidence: supplierConfidence,
         knownSuppliers: knownSuppliers,
         categoryOptions: categoryOptions,
+        productOptions: productOptions,
         poDate: poDate,
         lines: lines ?? this.lines,
       );
