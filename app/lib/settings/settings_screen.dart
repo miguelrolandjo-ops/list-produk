@@ -55,6 +55,13 @@ class SettingsScreen extends ConsumerWidget {
           ),
           const _Section('Data'),
           ListTile(
+            leading: const Icon(Icons.label_outline),
+            title: const Text('Kelola kategori'),
+            subtitle: const Text('Lihat dan hapus kategori'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/kategori'),
+          ),
+          ListTile(
             leading: const Icon(Icons.backup_outlined),
             title: const Text('Cadangkan data'),
             subtitle: const Text('Cadangkan atau pulihkan dari file'),

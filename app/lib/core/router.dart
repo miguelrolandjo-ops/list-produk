@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import '../products/add_product_screen.dart';
 import '../backup/backup_screen.dart';
 import '../products/edit_product_screen.dart';
+import '../products/manage_categories_screen.dart';
 import '../products/product_detail_screen.dart';
 import '../products/product_list_screen.dart';
 import '../review/review_screen.dart';
@@ -19,6 +20,7 @@ final appRouter = GoRouter(
       path: '/pengaturan/cadangan',
       builder: (_, _) => const BackupScreen(),
     ),
+    GoRoute(path: '/kategori', builder: (_, _) => const ManageCategoriesScreen()),
     GoRoute(path: '/pengaturan', builder: (_, _) => const SettingsScreen()),
     GoRoute(
       path: '/pengaturan/margin',

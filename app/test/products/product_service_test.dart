@@ -457,4 +457,76 @@ void main() {
       expect((await product(a)).unit, 'pcs');
     });
   });
+
+  group('deleteCategory', () {
+    Future<String> add(String name, String? category) => service.addManual(
+      NewProductInput(
+        name: name,
+        categoryName: category,
+        supplierName: 'CV Maju',
+        supplyPrice: 9500,
+      ),
+    );
+
+    Future<String> categoryId(String name) async => (await db
+            .customSelect(
+              'SELECT id FROM categories WHERE name = ?',
+              variables: [Variable.withString(name)],
+            )
+            .getSingle())
+        .read<String>('id');
+
+    test('removes the category and keeps its products, now uncategorized', () async {
+      final a = await add('A', 'Kabel');
+      final b = await add('B', 'Kabel');
+      final other = await add('C', 'Charger');
+
+      final changed = await service.deleteCategory(await categoryId('Kabel'));
+
+      expect(changed, 2);
+      expect(await service.categoryNames(), ['Charger']);
+      expect((await product(a)).categoryId, isNull);
+      expect((await product(b)).categoryId, isNull);
+      expect((await product(a)).deletedAt, isNull); // not deleted
+      expect((await product(other)).categoryId, isNotNull); // untouched
+    });
+
+    test('an unused category can be deleted', () async {
+      await add('A', 'Kabel');
+      await db.customStatement("INSERT INTO categories (id, name) VALUES ('c9', 'Kosong')");
+      expect(await service.deleteCategory('c9'), 0);
+      expect(await service.categoryNames(), ['Kabel']);
+    });
+
+    test('products that lost their category are re-published', () async {
+      final a = await add('A', 'Kabel');
+      await db.customStatement(
+        'UPDATE products SET published_at = updated_at WHERE id = ?',
+        [a],
+      );
+      expect(
+        await db.customSelect('SELECT id FROM products_to_publish').get(),
+        isEmpty,
+      );
+      await service.deleteCategory(await categoryId('Kabel'));
+      expect(
+        (await db.customSelect('SELECT id FROM products_to_publish').get())
+            .map((r) => r.read<String>('id')),
+        [a],
+      );
+    });
+
+    test('deleted products do not keep pointing at the removed category', () async {
+      final a = await add('A', 'Kabel');
+      await service.deleteProduct(a);
+      await service.deleteCategory(await categoryId('Kabel'));
+      expect((await product(a)).categoryId, isNull);
+    });
+
+    test('an unknown id changes nothing', () async {
+      await add('A', 'Kabel');
+      expect(await service.deleteCategory('nope'), 0);
+      expect(await service.categoryNames(), ['Kabel']);
+    });
+  });
 }

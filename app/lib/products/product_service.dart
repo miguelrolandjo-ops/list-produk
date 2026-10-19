@@ -360,6 +360,28 @@ class ProductService {
     ];
   }
 
+  /// Deletes a category. Its products are kept and become uncategorized
+  /// (done explicitly: SQLite only does it on its own with foreign keys on,
+  /// and they are not). Products that change are re-published, because the
+  /// category is an employee-visible field. Returns how many products lost
+  /// their category.
+  Future<int> deleteCategory(String categoryId) {
+    return _db.transaction(() async {
+      final changed = await _db.customUpdate(
+        'UPDATE products SET category_id = NULL WHERE category_id = ?',
+        variables: [Variable.withString(categoryId)],
+        updates: {_db.products},
+      );
+      await _db.customUpdate(
+        'DELETE FROM categories WHERE id = ?',
+        variables: [Variable.withString(categoryId)],
+        updates: {_db.categories},
+        updateKind: UpdateKind.delete,
+      );
+      return changed;
+    });
+  }
+
   /// Edits a product's name, unit and category, and records new supplier
   /// prices, in one transaction.
   ///

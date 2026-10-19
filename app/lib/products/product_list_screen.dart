@@ -60,6 +60,23 @@ class _ProductListScreenState extends ConsumerState<ProductListScreen> {
     if (!_selected.remove(id)) _selected.add(id);
   });
 
+  /// Opens Kelola kategori. If the category being filtered on was deleted
+  /// there, the filter is dropped so the list is not left empty.
+  Future<void> _manageCategories() async {
+    await context.push('/kategori');
+    if (!mounted) return;
+    final id = _categoryId;
+    if (id == null || id == uncategorizedFilter) return;
+    final counts = await ref.read(categoryCountsProvider.future);
+    if (!mounted) return;
+    if (!counts.categories.any((c) => c.id == id)) {
+      setState(() {
+        _categoryId = null;
+        _categoryName = null;
+      });
+    }
+  }
+
   Future<void> _massEdit() async {
     final action = await showModalBottomSheet<String>(
       context: context,
@@ -147,6 +164,7 @@ class _ProductListScreenState extends ConsumerState<ProductListScreen> {
                   _categoryId = id;
                   _categoryName = name;
                 }),
+                onManage: _manageCategories,
               ),
         appBar: _selecting
             ? AppBar(
@@ -348,10 +366,15 @@ class _CategoryDialogState extends State<_CategoryDialog> {
 
 /// Hamburger menu: group the list by category.
 class _CategoryDrawer extends ConsumerWidget {
-  const _CategoryDrawer({required this.selectedId, required this.onSelected});
+  const _CategoryDrawer({
+    required this.selectedId,
+    required this.onSelected,
+    required this.onManage,
+  });
 
   final String? selectedId;
   final void Function(String? id, String? name) onSelected;
+  final VoidCallback onManage;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -398,6 +421,15 @@ class _CategoryDrawer extends ConsumerWidget {
                       selected: selectedId == uncategorizedFilter,
                       onTap: () => pick(uncategorizedFilter, 'Tanpa kategori'),
                     ),
+                  const Divider(),
+                  ListTile(
+                    leading: const Icon(Icons.settings_outlined),
+                    title: const Text('Kelola kategori'),
+                    onTap: () {
+                      Navigator.pop(context); // close the drawer
+                      onManage();
+                    },
+                  ),
                 ],
               ),
       ),
