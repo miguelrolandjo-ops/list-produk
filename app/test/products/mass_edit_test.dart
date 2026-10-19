@@ -100,7 +100,7 @@ void main() {
     await tester.pump();
     expect(find.text('1 dipilih'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Pilih semua'));
+    await tester.tap(find.text('Pilih semua'));
     await tester.pump();
     expect(find.text('3 dipilih'), findsOneWidget);
 

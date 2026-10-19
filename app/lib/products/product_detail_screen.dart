@@ -129,7 +129,7 @@ class ProductDetailScreen extends ConsumerWidget {
         actions: [
           IconButton(
             tooltip: 'Ubah produk',
-            icon: const Icon(Icons.edit_note),
+            icon: const Icon(Icons.edit_outlined),
             onPressed: () => context.push('/produk/$productId/ubah'),
           ),
           IconButton(
@@ -150,6 +150,7 @@ class ProductDetailScreen extends ConsumerWidget {
             detail: d,
             onHistory: () => _showHistory(context, ref),
             onEdit: () => _editPrice(context, ref, d),
+            onMargin: () => context.push('/pengaturan/margin'),
           );
         },
       ),
@@ -222,11 +223,15 @@ class _Body extends StatelessWidget {
     required this.detail,
     required this.onHistory,
     required this.onEdit,
+    required this.onMargin,
   });
 
   final ProductDetail detail;
   final VoidCallback onHistory;
   final VoidCallback onEdit;
+
+  /// Opens the margin limits settings.
+  final VoidCallback onMargin;
 
   @override
   Widget build(BuildContext context) {
@@ -237,6 +242,8 @@ class _Body extends StatelessWidget {
     final margin = supply == null ? null : marginPct(supply, retail);
     final limit = detail.minMarginPct;
     final belowLimit = margin != null && limit != null && margin < limit;
+    // Selling at a loss: the margin itself is shown in red, besides the warning.
+    final isLoss = margin != null && margin < 0;
     final subtitle = [
       if (p.model != null) p.model!,
       if (detail.categoryName != null) detail.categoryName!,
@@ -254,66 +261,91 @@ class _Body extends StatelessWidget {
               Text(subtitle, style: theme.textTheme.bodyMedium),
               const SizedBox(height: 16),
               Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Harga jual'),
-                      const SizedBox(height: 4),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            retail == null ? '-' : formatRupiah(retail),
-                            style: theme.textTheme.headlineMedium,
-                          ),
-                          if (margin != null)
-                            Chip(label: Text('Margin ${_pct.format(margin)}%')),
-                        ],
-                      ),
-                      if (belowLimit)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.warning_amber_rounded,
-                                size: 18,
-                                color: theme.colorScheme.error,
+                clipBehavior: Clip.antiAlias,
+                // Tapping the card edits the retail price, like "Ubah harga".
+                child: InkWell(
+                  onTap: onEdit,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Harga jual'),
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              retail == null ? '-' : formatRupiah(retail),
+                              style: theme.textTheme.headlineMedium,
+                            ),
+                            if (margin != null)
+                              // Tapping the margin goes to Batas margin instead.
+                              ActionChip(
+                                label: Text(
+                                  'Margin ${_pct.format(margin)}%',
+                                  style: isLoss
+                                      ? TextStyle(
+                                          color: theme
+                                              .colorScheme
+                                              .onErrorContainer,
+                                          fontWeight: FontWeight.w600,
+                                        )
+                                      : null,
+                                ),
+                                backgroundColor: isLoss
+                                    ? theme.colorScheme.errorContainer
+                                    : null,
+                                side: isLoss
+                                    ? BorderSide(color: theme.colorScheme.error)
+                                    : null,
+                                onPressed: onMargin,
                               ),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(
-                                  'Margin di bawah batas '
-                                  '${_pct.format(detail.minMarginPct)}%',
-                                  style: TextStyle(
-                                    color: theme.colorScheme.error,
+                          ],
+                        ),
+                        if (belowLimit)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.warning_amber_rounded,
+                                  size: 18,
+                                  color: theme.colorScheme.error,
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    'Margin di bawah batas '
+                                    '${_pct.format(detail.minMarginPct)}%',
+                                    style: TextStyle(
+                                      color: theme.colorScheme.error,
+                                    ),
                                   ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
-                      if (supply != null)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            'Margin dari ${_marginBasisLabel(detail)} '
-                            '${formatRupiah(supply)}',
-                            style: theme.textTheme.bodySmall,
+                        if (supply != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              'Margin dari ${_marginBasisLabel(detail)} '
+                              '${formatRupiah(supply)}',
+                              style: theme.textTheme.bodySmall,
+                            ),
                           ),
+                        const SizedBox(height: 4),
+                        Text(
+                          p.retailIsOverride == 1
+                              ? 'Diubah manual, tidak dihitung ulang otomatis'
+                              : 'Otomatis dari harga supplier '
+                                    '${_basisLabel[detail.basis] ?? ''}',
+                          style: theme.textTheme.bodySmall,
                         ),
-                      const SizedBox(height: 4),
-                      Text(
-                        p.retailIsOverride == 1
-                            ? 'Diubah manual, tidak dihitung ulang otomatis'
-                            : 'Otomatis dari harga supplier '
-                                  '${_basisLabel[detail.basis] ?? ''}',
-                        style: theme.textTheme.bodySmall,
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),

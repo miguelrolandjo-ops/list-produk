@@ -219,7 +219,12 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
                     if (margin != null)
                       Text(
                         'Margin ${_pct.format(margin)}%',
-                        style: Theme.of(context).textTheme.titleMedium,
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          // Selling at a loss: show it in red.
+                          color: margin < 0
+                              ? Theme.of(context).colorScheme.error
+                              : null,
+                        ),
                       ),
                   ],
                 );

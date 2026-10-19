@@ -157,14 +157,14 @@ class _ProductListScreenState extends ConsumerState<ProductListScreen> {
                 ),
                 title: Text('${_selected.length} dipilih'),
                 actions: [
-                  IconButton(
-                    tooltip: 'Pilih semua',
-                    icon: const Icon(Icons.select_all),
+                  // A word, not an icon: "select all" icons are easy to misread.
+                  TextButton(
                     onPressed: () => setState(
                       () => _selected.addAll(
                         (products.value ?? const []).map((p) => p.id!),
                       ),
                     ),
+                    child: const Text('Pilih semua'),
                   ),
                   IconButton(
                     tooltip: 'Ubah yang dipilih',
