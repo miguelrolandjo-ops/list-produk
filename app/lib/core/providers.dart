@@ -166,7 +166,7 @@ class CategoryCounts {
   int get total => uncategorized + categories.fold(0, (s, c) => s + c.count);
 }
 
-/// Number of (non-archived) products per category, for the category menu.
+/// Number of (not deleted) products per category, for the category menu.
 final categoryCountsProvider = StreamProvider<CategoryCounts>((ref) async* {
   final db = ref.watch(ownerDbProvider);
 
@@ -205,15 +205,6 @@ final categoryCountsProvider = StreamProvider<CategoryCounts>((ref) async* {
   await for (final _ in changes) {
     yield await load();
   }
-});
-
-/// Archived products, most recently archived first.
-final archivedProductsProvider = StreamProvider<List<Product>>((ref) {
-  final db = ref.watch(ownerDbProvider);
-  return (db.select(db.products)
-        ..where((p) => p.deletedAt.isNotNull())
-        ..orderBy([(p) => OrderingTerm.desc(p.deletedAt)]))
-      .watch();
 });
 
 final productDetailProvider = FutureProvider.autoDispose

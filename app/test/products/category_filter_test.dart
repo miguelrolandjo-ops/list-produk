@@ -65,7 +65,7 @@ void main() {
     expect(await names(uncategorizedFilter), ['Casing']);
   });
 
-  test('counts per category skip archived products', () async {
+  test('counts per category skip deleted products', () async {
     container.listen(categoryCountsProvider, (_, _) {});
     var counts = await container.read(categoryCountsProvider.future);
     expect(
@@ -77,7 +77,7 @@ void main() {
 
     final products = await db.select(db.products).get();
     final casing = products.firstWhere((p) => p.name == 'Casing');
-    await service.archiveProduct(casing.id!);
+    await service.deleteProduct(casing.id!);
 
     container.invalidate(categoryCountsProvider);
     counts = await container.read(categoryCountsProvider.future);

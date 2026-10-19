@@ -53,7 +53,7 @@ void main() {
     expect(c.lastPriceBySupplier, {sup: 9500});
   });
 
-  test('archived products are left out', () async {
+  test('deleted products are left out', () async {
     final id = await service.addManual(
       const NewProductInput(
         name: 'Kabel Lama',

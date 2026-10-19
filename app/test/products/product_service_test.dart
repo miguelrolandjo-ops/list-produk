@@ -266,9 +266,9 @@ void main() {
       );
     });
 
-    test('archiveProduct is a soft delete and hides the product', () async {
+    test('deleteProduct is a soft delete and hides the product', () async {
       final id = await service.addManual(input());
-      await service.archiveProduct(id);
+      await service.deleteProduct(id);
       expect((await product(id)).deletedAt, isNotNull);
       expect(await service.detail(id), isNull);
       // Employees learn about the removal through the publish view.
@@ -278,67 +278,20 @@ void main() {
       expect(rows.single.read<int>('is_deleted'), 1);
     });
 
-    test('deleteArchivedProduct removes the product and its prices', () async {
-      final keep = await service.addManual(input(supplier: 'A', supply: 9500));
-      final gone = await service.addManual(input(supplier: 'B', supply: 45000));
-      await service.recordSupplierPrice(gone, await supplierId('B'), 50000);
-      await service.archiveProduct(gone);
-
-      await service.deleteArchivedProduct(gone);
-
-      expect(await db.select(db.products).get(), hasLength(1));
-      final prices = await db.select(db.supplierPrices).get();
-      expect(prices.map((p) => p.productId).toSet(), {keep});
-    });
-
-    test('only archived products can be deleted for good', () async {
-      final id = await service.addManual(input());
-      await expectLater(
-        service.deleteArchivedProduct(id),
-        throwsA(isA<ArgumentError>()),
-      );
-      expect(await db.select(db.products).get(), hasLength(1));
-    });
-
-    test(
-      'an archive employees have not received yet blocks deletion',
-      () async {
-        final id = await service.addManual(input());
-        // Published, then archived afterwards: the archive is not published.
-        await db.customStatement(
-          "UPDATE products SET published_at = '2026-10-01T00:00:00.000Z' "
-          "WHERE id = '$id'",
-        );
-        await service.archiveProduct(id);
-        await expectLater(
-          service.deleteArchivedProduct(id),
-          throwsA(isA<ArgumentError>()),
-        );
-
-        // Once the archive has been published (published_at = updated_at).
-        await db.customStatement(
-          'UPDATE products SET published_at = updated_at '
-          "WHERE id = '$id'",
-        );
-        await service.deleteArchivedProduct(id);
-        expect(await db.select(db.products).get(), isEmpty);
-      },
-    );
-
     test('restoreProduct brings it back with a recalculated price', () async {
       final id = await service.addManual(input()); // 9.500 -> 15.000
       final manual = await service.addManual(
         input(supply: 9500, retail: 17500),
       );
-      await service.archiveProduct(id);
-      await service.archiveProduct(manual);
+      await service.deleteProduct(id);
+      await service.deleteProduct(manual);
 
-      // Anchors change while both are archived: 9.500 now maps to 20.000.
+      // Anchors change while both are deleted: 9.500 now maps to 20.000.
       await PricingSettingsService(
         db,
         service,
       ).apply([for (final a in defaultAnchors) (a.$1, a.$2 + 5000)], 30);
-      expect((await product(id)).retailPrice, 15000); // skipped while archived
+      expect((await product(id)).retailPrice, 15000); // skipped while deleted
 
       await service.restoreProduct(id);
       await service.restoreProduct(manual);
@@ -479,10 +432,10 @@ void main() {
       expect(await service.setCategoryForMany([a], null), 0); // already none
     });
 
-    test('archived products are left alone', () async {
+    test('deleted products are left alone', () async {
       final a = await add('A');
       final b = await add('B');
-      await service.archiveProduct(b);
+      await service.deleteProduct(b);
       expect(await service.setUnitForMany([a, b], 'dus'), 1);
       expect((await product(b)).unit, 'pcs');
     });

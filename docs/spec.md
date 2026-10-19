@@ -168,7 +168,7 @@ supplier information.
 As an employee, I want to find a product's price in seconds while serving a customer.
 
 - Search by name, alias, or model; tolerant of typos and partial words.
-- Owner view (done in milestone 1): search by name or model, every typed word must match; product detail with retail price, margin, latest supplier price per supplier, price history, "Ubah harga" (override) and archive instead of delete (archived products leave the list and the employee catalog, are listed most recent first under Settings > Produk diarsipkan, and can be restored). Settings can hide the margin-warning and manual-price icons on the home list.
+- Owner view (done in milestone 1): search by name or model, every typed word must match; product detail with retail price, margin, latest supplier price per supplier, price history, "Ubah harga" (override) and "Hapus produk" (to the owner this is a plain delete: the product leaves the list and the employee catalog, and a snackbar offers "Urungkan" for a few seconds. Underneath it is a soft delete, `deleted_at`, so employees are told about the removal; there is no archive screen and no restore from Settings). Settings can hide the margin-warning and manual-price icons on the home list.
 - Browse by category.
 - Product card: photo, name, model/variant, unit, retail price.
 - Works offline with the last synced catalog; shows "last updated" time.

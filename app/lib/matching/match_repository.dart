@@ -3,7 +3,7 @@ import 'product_matcher.dart';
 
 /// Builds a [ProductMatcher] from the local catalog.
 ///
-/// Reads only. Archived products are left out: they are no longer part of the
+/// Reads only. Deleted products are left out: they are no longer part of the
 /// catalog, so a PO line should not silently re-link to them.
 class MatchRepository {
   MatchRepository(this._db);

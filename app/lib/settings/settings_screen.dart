@@ -61,12 +61,6 @@ class SettingsScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/pengaturan/cadangan'),
           ),
-          ListTile(
-            leading: const Icon(Icons.archive_outlined),
-            title: const Text('Produk diarsipkan'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.push('/arsip'),
-          ),
           if (kDebugMode) ...[
             const _Section('Uji coba (hanya build debug)'),
             ListTile(

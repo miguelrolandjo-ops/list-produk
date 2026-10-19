@@ -26,14 +26,18 @@ class ProductDetailScreen extends ConsumerWidget {
 
   final String productId;
 
-  Future<void> _archive(BuildContext context, WidgetRef ref) async {
+  Future<void> _delete(BuildContext context, WidgetRef ref) async {
+    // Taken before any await. The app-wide messenger outlives this screen, so
+    // the Undo snackbar still shows after it closes.
+    final messenger = ScaffoldMessenger.of(context);
+    final router = GoRouter.of(context);
+    final service = ref.read(productServiceProvider);
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Arsipkan produk?'),
+        title: const Text('Hapus produk?'),
         content: const Text(
-          'Produk tidak tampil lagi di daftar dan di katalog karyawan. '
-          'Bisa dipulihkan dari Pengaturan > Produk diarsipkan.',
+          'Produk dihapus dari daftar dan dari katalog karyawan.',
         ),
         actions: [
           TextButton(
@@ -42,14 +46,26 @@ class ProductDetailScreen extends ConsumerWidget {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Arsipkan'),
+            child: const Text('Hapus'),
           ),
         ],
       ),
     );
     if (ok != true) return;
-    await ref.read(productServiceProvider).archiveProduct(productId);
-    if (context.mounted) context.pop();
+    await service.deleteProduct(productId);
+    router.pop();
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: const Text('Produk dihapus'),
+          duration: const Duration(seconds: 6),
+          action: SnackBarAction(
+            label: 'Urungkan',
+            onPressed: () => service.restoreProduct(productId),
+          ),
+        ),
+      );
   }
 
   Future<void> _showHistory(BuildContext context, WidgetRef ref) async {
@@ -113,9 +129,9 @@ class ProductDetailScreen extends ConsumerWidget {
             onPressed: () => context.push('/produk/$productId/ubah'),
           ),
           IconButton(
-            tooltip: 'Arsipkan',
-            icon: const Icon(Icons.archive_outlined),
-            onPressed: () => _archive(context, ref),
+            tooltip: 'Hapus produk',
+            icon: const Icon(Icons.delete_outline),
+            onPressed: () => _delete(context, ref),
           ),
         ],
       ),

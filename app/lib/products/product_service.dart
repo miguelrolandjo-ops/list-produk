@@ -432,7 +432,7 @@ class ProductService {
     });
   }
 
-  /// Archived products are never touched. Ids go in chunks because SQLite
+  /// Deleted products are never touched. Ids go in chunks because SQLite
   /// limits the number of variables in one statement.
   Future<int> _updateMany(
     Iterable<String> productIds, {
@@ -471,10 +471,11 @@ class ProductService {
     );
   }
 
-  /// Archives a product: it disappears from the list and from employees'
-  /// catalog, but nothing is lost. Stored as deleted_at (the soft delete), so
-  /// employees learn about the removal and the owner can restore it.
-  Future<void> archiveProduct(String productId) async {
+  /// Deletes a product as far as the owner can tell: it disappears from the
+  /// list and from employees' catalog. Underneath it is a soft delete
+  /// (deleted_at), so employees learn about the removal and [restoreProduct]
+  /// can undo it right after.
+  Future<void> deleteProduct(String productId) async {
     await (_db.update(
       _db.products,
     )..where((p) => p.id.equals(productId))).write(
@@ -482,57 +483,7 @@ class ProductService {
     );
   }
 
-  /// Permanently removes an ARCHIVED product and its price history. Cannot be
-  /// undone (only a backup can bring it back).
-  ///
-  /// Refused while employees still have to be told about the archive: if the
-  /// product was published and the archive is newer than the last publish,
-  /// deleting the row now would leave it in their catalog forever.
-  Future<void> deleteArchivedProduct(String productId) async {
-    final product = await (_db.select(
-      _db.products,
-    )..where((p) => p.id.equals(productId))).getSingleOrNull();
-    if (product == null) return;
-    if (product.deletedAt == null) {
-      throw ArgumentError('Hanya produk yang diarsipkan yang bisa dihapus');
-    }
-    final published = product.publishedAt;
-    if (published != null && published.compareTo(product.updatedAt) < 0) {
-      throw ArgumentError(
-        'Produk ini belum disinkronkan ke karyawan. Coba lagi setelah '
-        'katalog dipublikasikan.',
-      );
-    }
-
-    // Child rows are removed explicitly: SQLite only cascades when foreign
-    // keys are switched on, and they are not.
-    await _db.transaction(() async {
-      await _db.customUpdate(
-        'DELETE FROM supplier_prices WHERE product_id = ?',
-        variables: [Variable.withString(productId)],
-        updates: {_db.supplierPrices},
-        updateKind: UpdateKind.delete,
-      );
-      await _db.customUpdate(
-        'DELETE FROM product_aliases WHERE product_id = ?',
-        variables: [Variable.withString(productId)],
-        updates: {_db.productAliases},
-        updateKind: UpdateKind.delete,
-      );
-      await _db.customUpdate(
-        'UPDATE po_lines SET matched_product_id = NULL '
-        'WHERE matched_product_id = ?',
-        variables: [Variable.withString(productId)],
-        updates: {_db.poLines},
-        updateKind: UpdateKind.update,
-      );
-      await (_db.delete(
-        _db.products,
-      )..where((p) => p.id.equals(productId))).go();
-    });
-  }
-
-  /// Brings an archived product back. While archived it was skipped by price
+  /// Undoes [deleteProduct]. While deleted it was skipped by price
   /// recalculations, so its retail price is recalculated now (manual prices
   /// stay as they are).
   Future<void> restoreProduct(String productId) async {
