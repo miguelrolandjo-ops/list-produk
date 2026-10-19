@@ -336,27 +336,70 @@ void main() {
       expect(d.lines[i].hint, LineHint.priceMissing);
     });
 
-    test('an unchecked default is not saved as a new price; a checked one is', () async {
-      var d = await importSample();
+    test('an accepted default price is saved to the price history, like an edited one', () async {
+      // Link the Sarung line to its product and leave its price as the default.
+      Future<ReviewDraft> onlySarung() async {
+        var d = await ReviewDraftLoader(db).load('po1');
+        final i = d.lines.indexWhere((l) => l.rawName == 'Sarung HP Silikon');
+        d = d.accept(i);
+        for (var k = 0; k < d.lines.length; k++) {
+          if (k != i) d = d.toggleIgnore(k);
+        }
+        return d;
+      }
+
+      Future<List<int>> history() async => [
+        for (final r in await db
+            .customSelect(
+              'SELECT unit_price FROM supplier_prices '
+              "WHERE product_id = (SELECT id FROM products WHERE name = 'Sarung HP Silikon') "
+              'ORDER BY observed_at DESC, rowid DESC',
+            )
+            .get())
+          r.read<int>('unit_price'),
+      ];
+
+      await importSample(); // product at 18.000 + imported PO
+      final d = await onlySarung();
+      final line = d.lines.singleWhere((l) => l.rawName == 'Sarung HP Silikon');
+      expect(line.priceFromCatalog, isTrue); // the warning "pakai harga lama"
+      expect(history(), completion([18000])); // only the original price so far
+
+      await ReviewService(db, products).save(d.toReviewedPo());
+
+      // Saved untouched: the PO's price (the old one) is in the history now,
+      // at the PO date, and linked to the PO line.
+      expect(await history(), [18000, 18000]);
+      final row = await db
+          .customSelect(
+            'SELECT observed_at, po_line_id FROM supplier_prices '
+            "WHERE po_line_id IS NOT NULL AND unit_price = 18000",
+          )
+          .getSingle();
+      expect(row.read<String>('observed_at'), startsWith('2026-10-04'));
+    });
+
+    test('a price the owner changed is saved too, and replaces the default', () async {
+      await importSample();
+      var d = await ReviewDraftLoader(db).load('po1');
       final i = d.lines.indexWhere((l) => l.rawName == 'Sarung HP Silikon');
-      // Keep only the Sarung line: link it, ignore the others.
-      d = d.accept(i);
+      d = d.accept(i).setPrice(i, 20000);
       for (var k = 0; k < d.lines.length; k++) {
         if (k != i) d = d.toggleIgnore(k);
       }
-      ReviewedLine linked(ReviewedPo po) =>
-          po.lines.singleWhere((l) => l.decision == LineDecision.link);
-
-      expect(linked(d.toReviewedPo()).unitPrice, isNull);
-      expect(linked(d.setPrice(i, 18000).toReviewedPo()).unitPrice, 18000);
-
-      Future<int> priceRows() async => (await db
-              .customSelect('SELECT COUNT(*) AS n FROM supplier_prices')
-              .getSingle())
-          .read<int>('n');
-      final before = await priceRows();
       await ReviewService(db, products).save(d.toReviewedPo());
-      expect(await priceRows(), before); // nothing new was observed
+      final prices = [
+        for (final r in await db
+            .customSelect(
+              'SELECT unit_price FROM supplier_prices '
+              "WHERE product_id = (SELECT id FROM products WHERE name = 'Sarung HP Silikon') "
+              'ORDER BY observed_at DESC, rowid DESC',
+            )
+            .get())
+          r.read<int>('unit_price'),
+      ];
+      expect(prices.toSet(), {18000, 20000});
+      expect(prices.where((p) => p == 20000), hasLength(1));
     });
   });
 

@@ -330,11 +330,10 @@ class ReviewDraft {
               poLineId: l.poLineId,
               rawName: l.rawName,
               productId: l.productId!,
-              // A default taken from the catalog was not seen on this PO, so
-              // it is only recorded once the owner has checked it.
-              unitPrice: l.priceFromCatalog && !l.priceChecked
-                  ? null
-                  : l.unitPrice,
+              // A default from the catalog ("pakai harga lama") is saved too:
+              // the PO bought the product at the price the owner accepted, so
+              // it belongs in the price history with this PO's date.
+              unitPrice: l.unitPrice,
             ),
       ],
     );

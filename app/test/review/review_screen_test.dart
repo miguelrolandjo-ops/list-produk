@@ -265,4 +265,98 @@ void main() {
     expect(find.text('Bukan produk ini, buat produk baru'), findsOneWidget);
     expect(find.text('Pilih produk yang sudah ada'), findsNothing);
   });
+
+  group('price history after saving a review (Harga tidak terbaca, pakai harga lama)', () {
+    /// Reviews the sample PO with an existing "Sarung HP Silikon" (18.000 from
+    /// the same supplier), answers its suggestion, optionally edits the price in
+    /// the real dialog, saves, and returns that product's price history.
+    Future<List<int>> reviewAndSave(WidgetTester tester, {int? newPrice}) async {
+      tester.view.physicalSize = const Size(800, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final db = OwnerDatabase(NativeDatabase.memory());
+      addTearDown(() => tester.runAsync(db.close));
+      late String poId;
+      await tester.runAsync(() async {
+        await ProductService(db).addManual(
+          const NewProductInput(
+            name: 'Sarung HP Silikon',
+            supplierName: 'CV Maju Elektrik',
+            supplyPrice: 18000,
+          ),
+        );
+        poId = await seedSamplePo(db, PoImportService(db));
+      });
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [ownerDbProvider.overrideWithValue(db)],
+          child: MaterialApp.router(
+            routerConfig: GoRouter(
+              routes: [
+                GoRoute(path: '/', builder: (_, _) => const Text('home')),
+                GoRoute(path: '/review', builder: (_, _) => ReviewScreen(poId: poId)),
+              ],
+            ),
+          ),
+        ),
+      );
+      // Open the review screen on top of the placeholder home.
+      final router = GoRouter.of(tester.element(find.text('home')));
+      router.push('/review');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 200)),
+      );
+      await tester.pump();
+
+      // The warning from the bug report, with the old price as the default.
+      expect(find.text('Harga tidak terbaca, pakai harga lama'), findsOneWidget);
+      await tester.tap(find.byTooltip('Ya'));
+      await tester.pump();
+      expect(find.text('18.000'), findsOneWidget); // shown once it is linked
+
+      if (newPrice != null) {
+        await tester.tap(find.text('Sarung HP Silikon'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Ubah harga'));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField), '$newPrice');
+        await tester.tap(find.widgetWithText(FilledButton, 'Simpan'));
+        await tester.pumpAndSettle();
+        expect(find.text('Harga tidak terbaca, pakai harga lama'), findsNothing);
+      }
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Simpan 5 produk'));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 250)),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      final history = await tester.runAsync(() async {
+        final id = (await db
+                .customSelect("SELECT id FROM products WHERE name = 'Sarung HP Silikon'")
+                .getSingle())
+            .read<String>('id');
+        return [
+          for (final e in await ProductService(db).priceHistory(id)) e.unitPrice,
+        ];
+      });
+      return history!;
+    }
+
+    testWidgets('left as the default: the old price is in the history again', (tester) async {
+      // The original 18.000 and this PO's 18.000.
+      expect(await reviewAndSave(tester), [18000, 18000]);
+    });
+
+    testWidgets('changed by hand in the dialog: the new price is in the history', (tester) async {
+      final history = await reviewAndSave(tester, newPrice: 20000);
+      expect(history.toSet(), {18000, 20000});
+      expect(history, hasLength(2));
+    });
+  });
 }
