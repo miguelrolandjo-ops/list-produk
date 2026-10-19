@@ -229,7 +229,8 @@ void main() {
     );
     await tester.pump();
 
-    // The matcher left this line as a new product.
+    // The matcher left this line as a new product (and its price is unreadable).
+    expect(find.text('Harga tidak terbaca, isi harga'), findsOneWidget);
     await tester.tap(find.text('Sarung HP Silikon'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Pilih produk yang sudah ada'));
@@ -250,9 +251,14 @@ void main() {
     await tester.tap(find.text('Casing Silikon Premium'));
     await tester.pumpAndSettle();
 
-    // The line is linked now. Its price is still missing, so the row shows
-    // that warning; the menu proves the link: it now offers another product
-    // and a way back to "new product", instead of "pick an existing one".
+    // The row shows the new mapping right away, together with its warning:
+    // the warning no longer hides what the line is linked to.
+    expect(find.text('Terhubung: Casing Silikon Premium'), findsOneWidget);
+    expect(find.text('Harga tidak terbaca, isi harga'), findsOneWidget);
+    expect(find.text('Produk baru'), findsWidgets); // the other new lines
+
+    // The menu agrees: it now offers another product and a way back to
+    // "new product", instead of "pick an existing one".
     await tester.tap(find.text('Sarung HP Silikon'));
     await tester.pumpAndSettle();
     expect(find.text('Pilih produk lain'), findsOneWidget);

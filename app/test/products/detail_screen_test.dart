@@ -46,8 +46,8 @@ void main() {
               ProductDetailScreen(productId: state.pathParameters['id']!),
         ),
         GoRoute(
-          path: '/pengaturan/margin',
-          builder: (_, _) => const Text('layar batas margin'),
+          path: '/pengaturan/harga',
+          builder: (_, _) => const Text('layar aturan harga'),
         ),
       ],
     );
@@ -88,13 +88,13 @@ void main() {
     expect(find.text('Ubah harga jual'), findsOneWidget);
   });
 
-  testWidgets('tapping the margin goes to Batas margin, not the price dialog', (
+  testWidgets('tapping the margin goes to Aturan harga, not the price dialog', (
     tester,
   ) async {
     await openDetail(tester);
     await tester.tap(find.textContaining('Margin 3'));
     await tester.pump(const Duration(milliseconds: 400));
-    expect(find.text('layar batas margin'), findsOneWidget);
+    expect(find.text('layar aturan harga'), findsOneWidget);
     expect(find.text('Ubah harga jual'), findsNothing);
   });
 

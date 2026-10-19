@@ -332,7 +332,7 @@ class _LineRow extends StatelessWidget {
         ].join(' · '),
       ),
     };
-    final caption = switch (hint) {
+    final warning = switch (hint) {
       LineHint.priceMissing => 'Harga tidak terbaca, isi harga',
       LineHint.priceFromCatalog => 'Harga tidak terbaca, pakai harga lama',
       LineHint.priceUnclear =>
@@ -341,7 +341,7 @@ class _LineRow extends StatelessWidget {
             : 'Teks kurang jelas, cek harga '
                   '(sebelumnya ${groupThousands(line.previousPrice!)})',
       LineHint.nameUnclear => 'Teks kurang jelas, cek nama',
-      LineHint.none => text,
+      LineHint.none => null,
     };
 
     return Container(
@@ -370,15 +370,19 @@ class _LineRow extends StatelessWidget {
                             : null,
                       ),
                     ),
+                    // What the line is linked to, always: a warning must not hide
+                    // it, or a changed mapping looks like it did not change.
                     Row(
                       children: [
-                        if (!warn) ...[
-                          Icon(icon, size: 14, color: _captionColor(context)),
-                          const SizedBox(width: 4),
-                        ],
+                        Icon(
+                          icon,
+                          size: 14,
+                          color: warn ? warnColor : _captionColor(context),
+                        ),
+                        const SizedBox(width: 4),
                         Flexible(
                           child: Text(
-                            caption,
+                            text,
                             style: muted?.copyWith(
                               color: warn ? warnColor : _captionColor(context),
                             ),
@@ -386,6 +390,14 @@ class _LineRow extends StatelessWidget {
                         ),
                       ],
                     ),
+                    if (warning != null)
+                      Text(
+                        warning,
+                        style: muted?.copyWith(
+                          color: warnColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                   ],
                 ),
               ),

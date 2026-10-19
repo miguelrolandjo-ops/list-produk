@@ -150,7 +150,7 @@ class ProductDetailScreen extends ConsumerWidget {
             detail: d,
             onHistory: () => _showHistory(context, ref),
             onEdit: () => _editPrice(context, ref, d),
-            onMargin: () => context.push('/pengaturan/margin'),
+            onMargin: () => context.push('/pengaturan/harga'),
           );
         },
       ),
@@ -230,7 +230,7 @@ class _Body extends StatelessWidget {
   final VoidCallback onHistory;
   final VoidCallback onEdit;
 
-  /// Opens the margin limits settings.
+  /// Opens the pricing rules (Aturan harga).
   final VoidCallback onMargin;
 
   @override
