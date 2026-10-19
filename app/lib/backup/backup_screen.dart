@@ -2,14 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
 
 import 'dart:io';
 
 import '../core/display_prefs.dart';
 import '../core/providers.dart';
-import 'backup_exporter.dart' show BackupDestination;
+import 'backup_exporter.dart' show BackupDestination, SavedBackup;
 import 'backup_service.dart';
 
 final _date = DateFormat('d MMM y, HH.mm', 'id_ID');
@@ -92,13 +91,42 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     }
   }
 
-  Future<void> _restore() async {
-    final picked = await FilePicker.pickFile(
-      type: FileType.custom,
-      allowedExtensions: ['zip'],
+  /// Restore looks in the Download folder first: the backups saved there are
+  /// offered newest first. Only if there are none, or the owner says the one
+  /// they want is elsewhere, the general file picker opens.
+  Future<File?> _chooseBackupFile() async {
+    final exporter = ref.read(backupExporterProvider);
+    final saved = await exporter.savedBackups();
+    if (saved.isEmpty) return exporter.pickFile();
+    if (!mounted) return null;
+
+    final choice = await showModalBottomSheet<Object>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) => _SavedBackupsSheet(backups: saved),
     );
-    final path = picked?.path;
-    if (path == null) return;
+    if (choice is SavedBackup) {
+      setState(() => _busy = true);
+      try {
+        return await exporter.fetch(choice);
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+    }
+    return choice == _SavedBackupsSheet.other ? exporter.pickFile() : null;
+  }
+
+  Future<void> _restore() async {
+    final File? picked;
+    try {
+      picked = await _chooseBackupFile();
+    } catch (e) {
+      _message('Tidak bisa membuka file cadangan: $e');
+      return;
+    }
+    if (picked == null || !mounted) return;
+    final path = picked.path;
 
     setState(() => _busy = true);
     try {
@@ -230,6 +258,55 @@ class _ConfirmRestoreDialog extends StatelessWidget {
           child: const Text('Ganti semua data'),
         ),
       ],
+    );
+  }
+}
+
+/// "Pilih cadangan": the backups found in Download, newest first, plus a way
+/// to pick a file from somewhere else.
+class _SavedBackupsSheet extends StatelessWidget {
+  const _SavedBackupsSheet({required this.backups});
+
+  /// Returned when the owner wants to browse for a file instead.
+  static const other = 'other';
+
+  final List<SavedBackup> backups;
+
+  static String _size(int bytes) => bytes < 1024 * 1024
+      ? '${(bytes / 1024).ceil()} KB'
+      : '${(bytes / (1024 * 1024)).toStringAsFixed(1).replaceAll('.', ',')} MB';
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.7,
+        ),
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const ListTile(
+              title: Text('Pilih cadangan'),
+              subtitle: Text('Ditemukan di folder Download'),
+            ),
+            for (var i = 0; i < backups.length; i++)
+              ListTile(
+                leading: const Icon(Icons.folder_zip_outlined),
+                title: Text(_date.format(backups[i].modified)),
+                subtitle: Text('${backups[i].name} · ${_size(backups[i].size)}'),
+                trailing: i == 0 ? const Chip(label: Text('Terbaru')) : null,
+                onTap: () => Navigator.pop(context, backups[i]),
+              ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.folder_open),
+              title: const Text('Pilih file lain'),
+              onTap: () => Navigator.pop(context, other),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

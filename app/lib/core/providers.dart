@@ -62,7 +62,7 @@ final bulkAdjustServiceProvider = Provider<BulkAdjustService>(
 
 /// Where the owner database lives (same place drift_flutter uses by default).
 final backupExporterProvider = Provider<BackupExporter>(
-  (ref) => const PlatformBackupExporter(),
+  (ref) => PlatformBackupExporter(),
 );
 
 final backupServiceProvider = FutureProvider<BackupService>((ref) async {

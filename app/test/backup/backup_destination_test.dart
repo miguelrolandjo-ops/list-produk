@@ -14,12 +14,26 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:path/path.dart' as p;
 
 class _FakeExporter implements BackupExporter {
-  _FakeExporter({this.shared = true, this.saved = true});
+  _FakeExporter({
+    this.shared = true,
+    this.saved = true,
+    this.backups = const [],
+  });
 
   final bool shared;
   final bool saved;
+
+  /// What "found in Download" returns (the screen expects newest first).
+  final List<SavedBackup> backups;
+
+  /// What the file picker returns, and what [fetch] returns.
+  File? picked;
+  File? fetchResult;
+
   final sharedFiles = <String>[];
   final savedFiles = <String>[];
+  final fetched = <String>[];
+  var pickCalls = 0;
 
   @override
   Future<bool> shareFile(File zip) async {
@@ -33,6 +47,21 @@ class _FakeExporter implements BackupExporter {
     expect(zip.existsSync(), isTrue);
     savedFiles.add(p.basename(zip.path));
     return saved;
+  }
+
+  @override
+  Future<List<SavedBackup>> savedBackups() async => backups;
+
+  @override
+  Future<File> fetch(SavedBackup backup) async {
+    fetched.add(backup.id);
+    return fetchResult!;
+  }
+
+  @override
+  Future<File?> pickFile() async {
+    pickCalls++;
+    return picked;
   }
 }
 
@@ -48,6 +77,7 @@ class _FakeDisplayPrefs extends DisplayPrefsNotifier {
 void main() {
   late Directory root;
   late OwnerDatabase db;
+  late BackupService service;
 
   Future<void> settle(WidgetTester tester) => tester
       .runAsync(() async {
@@ -97,7 +127,7 @@ void main() {
     addTearDown(() => tester.runAsync(db.close));
     await tester.runAsync(() => initializeDateFormatting('id_ID'));
 
-    final service = BackupService(
+    service = BackupService(
       db: db,
       databaseFile: dbFile,
       tempDir: Directory(p.join(root.path, 'tmp')),
@@ -219,5 +249,139 @@ void main() {
     expect(exporter.savedFiles, isEmpty);
     expect(await markedBackedUp(tester), isFalse);
     await finish(tester);
+  });
+
+  group('restore looks in the Download folder first', () {
+    SavedBackup saved(String name, DateTime when, {int size = 4096}) =>
+        SavedBackup(id: 'id-$name', name: name, size: size, modified: when);
+
+    final newest = saved(
+      'harga-toko-cadangan-20261018-0900.zip',
+      DateTime(2026, 10, 18, 9, 0),
+      size: 3 * 1024 * 1024,
+    );
+    final older = saved(
+      'harga-toko-cadangan-20260901-0800.zip',
+      DateTime(2026, 9, 1, 8, 0),
+    );
+
+    Future<File> realZip(WidgetTester tester) async =>
+        (await tester.runAsync(() => service.createBackup()))!;
+
+    testWidgets('lists what it found, newest first, with the newest marked', (tester) async {
+      final exporter = _FakeExporter(backups: [newest, older]);
+      await open(tester, exporter);
+
+      await tester.tap(find.text('Pulihkan dari file'));
+      await frames(tester);
+
+      expect(find.text('Pilih cadangan'), findsOneWidget);
+      expect(find.text('Ditemukan di folder Download'), findsOneWidget);
+      expect(find.text('Terbaru'), findsOneWidget); // only the first one
+      expect(find.textContaining('3,0 MB'), findsOneWidget);
+      expect(find.textContaining('4 KB'), findsOneWidget);
+      // Newest above older.
+      expect(
+        tester.getTopLeft(find.textContaining(newest.name)).dy,
+        lessThan(tester.getTopLeft(find.textContaining(older.name)).dy),
+      );
+      // The general picker is not opened unless asked for.
+      expect(exporter.pickCalls, 0);
+      await finish(tester);
+    });
+
+    testWidgets('choosing one fetches it and asks for confirmation; Batal changes nothing', (
+      tester,
+    ) async {
+      final exporter = _FakeExporter(backups: [newest, older]);
+      await open(tester, exporter);
+      exporter.fetchResult = await realZip(tester);
+
+      await tester.tap(find.text('Pulihkan dari file'));
+      await frames(tester);
+      await tester.tap(find.textContaining(newest.name));
+      await done(tester, until: () => find.text('Pulihkan data?').evaluate().isNotEmpty);
+
+      expect(exporter.fetched, [newest.id]);
+      expect(exporter.pickCalls, 0);
+      expect(find.text('Pulihkan data?'), findsOneWidget);
+      expect(find.textContaining('berisi 0 produk'), findsOneWidget);
+
+      await tester.tap(find.text('Batal'));
+      await frames(tester);
+      expect(find.text('Pulihkan data?'), findsNothing);
+      await finish(tester);
+    });
+
+    testWidgets('no backups found: the file picker opens straight away', (tester) async {
+      final exporter = _FakeExporter(); // nothing in Download
+      await open(tester, exporter);
+
+      await tester.tap(find.text('Pulihkan dari file'));
+      await done(tester, until: () => exporter.pickCalls > 0);
+
+      expect(exporter.pickCalls, 1);
+      expect(find.text('Pilih cadangan'), findsNothing); // no list to show
+      expect(find.byType(AlertDialog), findsNothing); // cancelled picker: nothing happens
+      await finish(tester);
+    });
+
+    testWidgets('"Pilih file lain" opens the file picker', (tester) async {
+      final exporter = _FakeExporter(backups: [newest]);
+      await open(tester, exporter);
+
+      await tester.tap(find.text('Pulihkan dari file'));
+      await frames(tester);
+      await tester.tap(find.text('Pilih file lain'));
+      await done(tester, until: () => exporter.pickCalls > 0);
+
+      expect(exporter.pickCalls, 1);
+      expect(exporter.fetched, isEmpty);
+      await finish(tester);
+    });
+
+    testWidgets('a file from the picker goes through the same checks and confirmation', (
+      tester,
+    ) async {
+      final exporter = _FakeExporter();
+      await open(tester, exporter);
+      exporter.picked = await realZip(tester);
+
+      await tester.tap(find.text('Pulihkan dari file'));
+      await done(tester, until: () => find.text('Pulihkan data?').evaluate().isNotEmpty);
+      expect(find.text('Pulihkan data?'), findsOneWidget);
+      await tester.tap(find.text('Batal'));
+      await frames(tester);
+      await finish(tester);
+    });
+
+    testWidgets('a file that is not a backup is refused with a message', (tester) async {
+      final exporter = _FakeExporter();
+      await open(tester, exporter);
+      exporter.picked = File(p.join(root.path, 'notes.zip'))
+        ..writeAsStringSync('not a zip at all');
+
+      await tester.tap(find.text('Pulihkan dari file'));
+      await done(tester);
+
+      expect(find.text('File ini bukan cadangan aplikasi Harga Toko.'), findsOneWidget);
+      expect(find.text('Pulihkan data?'), findsNothing);
+      await finish(tester);
+    });
+
+    testWidgets('dismissing the list does nothing', (tester) async {
+      final exporter = _FakeExporter(backups: [newest]);
+      await open(tester, exporter);
+
+      await tester.tap(find.text('Pulihkan dari file'));
+      await frames(tester);
+      await tester.tapAt(const Offset(400, 50));
+      await frames(tester);
+
+      expect(exporter.fetched, isEmpty);
+      expect(exporter.pickCalls, 0);
+      expect(find.text('Pulihkan data?'), findsNothing);
+      await finish(tester);
+    });
   });
 }

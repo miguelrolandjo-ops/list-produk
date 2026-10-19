@@ -113,7 +113,7 @@ store-price-guide/
 | `flutter_image_compress` | Shrink PO photos before upload |
 | `receive_sharing_intent` | Receiving images shared from WhatsApp, Gallery, etc. |
 | `app_links` | Opening the app from invite links |
-| `share_plus`, `downloadsfolder`, `file_picker` | Backup export (Drive / Download folder) and restore |
+| `share_plus`, `file_picker` | Backup export (share sheet) and restore picker; the Download folder is our own MediaStore channel |
 | `intl` | `Rp 15.000` formatting |
 
 Check each package's README for current setup. The Android manifest changes for
@@ -265,11 +265,19 @@ no suppliers or supply prices.
    (no photos: the backup is text only, so it stays small and portable; it holds all
    products, deleted and not), then asks where to put it: **Google Drive** (opens the
    share sheet, where Drive is a target) or **Simpan di HP**, which copies the zip
-   straight into the public Download folder without asking for a location
-   (`downloadsfolder`: MediaStore on Android 10+, no permission; Android 9 and older
-   use `WRITE_EXTERNAL_STORAGE`, declared with `maxSdkVersion="28"`).
-3. **Restore:** "Pulihkan data" on a fresh install picks that file and replaces the
-   local database.
+   straight into the public Download folder without asking for a location. That is
+   our own small MediaStore channel in `MainActivity.kt` (no plugin, so nothing
+   depends on the Kotlin Gradle plugin that future Flutter versions will reject):
+   Android 10+ needs no permission and MediaStore picks a free name instead of
+   overwriting. Android 9 and older are not supported there; the app says so and
+   points to Google Drive.
+3. **Restore:** "Pulihkan dari file" first looks in the Download folder for backups
+   this app saved (name `harga-toko-cadangan-YYYYMMDD-HHMM.zip`) and lists them
+   newest first, the newest marked "Terbaru"; "Pilih file lain" (or no backups found)
+   opens the general file picker. The chosen zip is read directly (no manual
+   extraction), checked, confirmed with the owner, and then replaces the local
+   database. After a reinstall, Android hides files a previous install saved, so the
+   list can be empty; the file picker then finds the zip in Download as usual.
 4. **Reminder:** if `settings.last_backup_at` is older than 7 days, show a banner.
 
 PO photos can be excluded from backups once a PO is saved, to keep files small.

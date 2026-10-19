@@ -9,6 +9,10 @@ import '../data/owner_database.dart';
 
 /// Written into every backup so a random zip is never mistaken for one.
 const backupAppId = 'harga-toko-owner';
+
+/// Backup files are named `<prefix>YYYYMMDD-HHMM.zip`; restore looks for this
+/// prefix in the Download folder.
+const backupFilePrefix = 'harga-toko-cadangan-';
 const backupFormat = 1;
 
 const _manifestName = 'manifest.json';
@@ -108,7 +112,7 @@ class BackupService {
     final local = createdAt.toLocal();
     String two(int v) => v.toString().padLeft(2, '0');
     final name =
-        'harga-toko-cadangan-${local.year}${two(local.month)}${two(local.day)}'
+        '$backupFilePrefix${local.year}${two(local.month)}${two(local.day)}'
         '-${two(local.hour)}${two(local.minute)}.zip';
     final zip = File(p.join(_tempDir.path, name));
     await zip.writeAsBytes(ZipEncoder().encodeBytes(archive));
