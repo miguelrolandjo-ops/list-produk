@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../backup/backup_service.dart';
 
+import '../backup/backup_exporter.dart';
 import '../data/owner_database.dart';
 import '../pricing/bulk_adjust_service.dart';
 import '../pricing/margin_service.dart';
@@ -60,6 +61,10 @@ final bulkAdjustServiceProvider = Provider<BulkAdjustService>(
 );
 
 /// Where the owner database lives (same place drift_flutter uses by default).
+final backupExporterProvider = Provider<BackupExporter>(
+  (ref) => const PlatformBackupExporter(),
+);
+
 final backupServiceProvider = FutureProvider<BackupService>((ref) async {
   final documents = await getApplicationDocumentsDirectory();
   final temp = await getTemporaryDirectory();

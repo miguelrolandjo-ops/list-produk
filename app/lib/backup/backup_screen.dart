@@ -3,12 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:share_plus/share_plus.dart';
+import 'package:path/path.dart' as p;
 
 import 'dart:io';
 
 import '../core/display_prefs.dart';
 import '../core/providers.dart';
+import 'backup_exporter.dart' show BackupDestination;
 import 'backup_service.dart';
 
 final _date = DateFormat('d MMM y, HH.mm', 'id_ID');
@@ -18,7 +19,8 @@ String daysAgo(DateTime then, DateTime now) {
   return days <= 0 ? 'hari ini' : '$days hari lalu';
 }
 
-/// "Cadangkan data": share a backup file, or restore from one.
+/// "Cadangkan data": back up to Google Drive or the phone's Download folder,
+/// or restore from a backup file.
 class BackupScreen extends ConsumerStatefulWidget {
   const BackupScreen({super.key});
 
@@ -35,20 +37,53 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   }
 
   Future<void> _backupNow() async {
+    final destination = await showModalBottomSheet<BackupDestination>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(title: Text('Simpan cadangan ke mana?')),
+            ListTile(
+              leading: const Icon(Icons.add_to_drive),
+              title: const Text('Google Drive'),
+              subtitle: const Text('Pilih Drive di menu berbagi'),
+              onTap: () => Navigator.pop(context, BackupDestination.drive),
+            ),
+            ListTile(
+              leading: const Icon(Icons.download_for_offline_outlined),
+              title: const Text('Simpan di HP'),
+              subtitle: const Text('Langsung ke folder Download'),
+              onTap: () => Navigator.pop(context, BackupDestination.local),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (destination == null || !mounted) return;
+
     setState(() => _busy = true);
     try {
       final service = await ref.read(backupServiceProvider.future);
+      final exporter = ref.read(backupExporterProvider);
       final file = await service.createBackup();
-      final result = await SharePlus.instance.share(
-        ShareParams(
-          files: [XFile(file.path, mimeType: 'application/zip')],
-          subject: 'Cadangan Harga Toko',
-        ),
-      );
-      // Only count it as a backup if the owner didn't close the share sheet.
-      if (result.status != ShareResultStatus.dismissed) {
-        await service.markBackedUp();
-        _message('Cadangan dibuat. Pastikan file tersimpan di tempat aman.');
+      switch (destination) {
+        case BackupDestination.drive:
+          // Only count it as a backup if the owner didn't close the sheet.
+          if (await exporter.shareFile(file)) {
+            await service.markBackedUp();
+            _message('Cadangan dibuat. Pastikan file tersimpan di tempat aman.');
+          }
+        case BackupDestination.local:
+          if (await exporter.saveToDownloads(file)) {
+            await service.markBackedUp();
+            _message('Cadangan disimpan di folder Download: ${p.basename(file.path)}');
+          } else {
+            _message(
+              'Gagal menyimpan ke folder Download. Coba lewat Google Drive.',
+            );
+          }
       }
     } catch (e) {
       _message('Gagal membuat cadangan: $e');
@@ -136,12 +171,12 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
           const SizedBox(height: 8),
           FilledButton.icon(
             onPressed: _busy ? null : _backupNow,
-            icon: const Icon(Icons.ios_share),
+            icon: const Icon(Icons.backup_outlined),
             label: const Text('Cadangkan sekarang'),
           ),
           const SizedBox(height: 6),
           Text(
-            'Simpan file ke Google Drive atau kirim ke diri sendiri. '
+            'Pilih Google Drive atau simpan di folder Download HP. '
             'Foto tidak ikut dicadangkan.',
             textAlign: TextAlign.center,
             style: theme.textTheme.bodySmall,

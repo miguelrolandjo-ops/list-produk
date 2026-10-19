@@ -113,7 +113,7 @@ store-price-guide/
 | `flutter_image_compress` | Shrink PO photos before upload |
 | `receive_sharing_intent` | Receiving images shared from WhatsApp, Gallery, etc. |
 | `app_links` | Opening the app from invite links |
-| `share_plus`, `file_picker` | Backup export and restore |
+| `share_plus`, `downloadsfolder`, `file_picker` | Backup export (Drive / Download folder) and restore |
 | `intl` | `Rp 15.000` formatting |
 
 Check each package's README for current setup. The Android manifest changes for
@@ -263,8 +263,11 @@ no suppliers or supply prices.
 2. **Manual export:** "Cadangkan data" in Settings creates a copy of the SQLite file
    (use SQLite's `VACUUM INTO` for a consistent copy), zips it with a small manifest
    (no photos: the backup is text only, so it stays small and portable; it holds all
-   products, archived and not), and opens the share sheet so the owner can save it to
-   Google Drive or send it to themselves.
+   products, deleted and not), then asks where to put it: **Google Drive** (opens the
+   share sheet, where Drive is a target) or **Simpan di HP**, which copies the zip
+   straight into the public Download folder without asking for a location
+   (`downloadsfolder`: MediaStore on Android 10+, no permission; Android 9 and older
+   use `WRITE_EXTERNAL_STORAGE`, declared with `maxSdkVersion="28"`).
 3. **Restore:** "Pulihkan data" on a fresh install picks that file and replaces the
    local database.
 4. **Reminder:** if `settings.last_backup_at` is older than 7 days, show a banner.
