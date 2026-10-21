@@ -1806,6 +1806,17 @@ class Products extends Table with TableInfo<Products, Product> {
     requiredDuringInsert: false,
     $customConstraints: '',
   );
+  static const VerificationMeta _pendingRetailMeta = const VerificationMeta(
+    'pendingRetail',
+  );
+  late final GeneratedColumn<int> pendingRetail = GeneratedColumn<int>(
+    'pending_retail',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    $customConstraints: 'CHECK (pending_retail IS NULL OR pending_retail > 0)',
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1821,6 +1832,7 @@ class Products extends Table with TableInfo<Products, Product> {
     updatedAt,
     deletedAt,
     publishedAt,
+    pendingRetail,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1926,6 +1938,15 @@ class Products extends Table with TableInfo<Products, Product> {
         ),
       );
     }
+    if (data.containsKey('pending_retail')) {
+      context.handle(
+        _pendingRetailMeta,
+        pendingRetail.isAcceptableOrUnknown(
+          data['pending_retail']!,
+          _pendingRetailMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -1987,6 +2008,10 @@ class Products extends Table with TableInfo<Products, Product> {
         DriftSqlType.string,
         data['${effectivePrefix}published_at'],
       ),
+      pendingRetail: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}pending_retail'],
+      ),
     );
   }
 
@@ -2019,6 +2044,11 @@ class Product extends DataClass implements Insertable<Product> {
 
   /// soft delete, so employees learn about removals
   final String? publishedAt;
+
+  /// last successful publish_catalog()
+  /// Retail price the app proposes after a supplier price change, waiting for
+  /// the owner's yes/no. NULL = nothing to confirm. Never published.
+  final int? pendingRetail;
   const Product({
     this.id,
     required this.name,
@@ -2033,6 +2063,7 @@ class Product extends DataClass implements Insertable<Product> {
     required this.updatedAt,
     this.deletedAt,
     this.publishedAt,
+    this.pendingRetail,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -2066,6 +2097,9 @@ class Product extends DataClass implements Insertable<Product> {
     if (!nullToAbsent || publishedAt != null) {
       map['published_at'] = Variable<String>(publishedAt);
     }
+    if (!nullToAbsent || pendingRetail != null) {
+      map['pending_retail'] = Variable<int>(pendingRetail);
+    }
     return map;
   }
 
@@ -2098,6 +2132,9 @@ class Product extends DataClass implements Insertable<Product> {
       publishedAt: publishedAt == null && nullToAbsent
           ? const Value.absent()
           : Value(publishedAt),
+      pendingRetail: pendingRetail == null && nullToAbsent
+          ? const Value.absent()
+          : Value(pendingRetail),
     );
   }
 
@@ -2120,6 +2157,7 @@ class Product extends DataClass implements Insertable<Product> {
       updatedAt: serializer.fromJson<String>(json['updated_at']),
       deletedAt: serializer.fromJson<String?>(json['deleted_at']),
       publishedAt: serializer.fromJson<String?>(json['published_at']),
+      pendingRetail: serializer.fromJson<int?>(json['pending_retail']),
     );
   }
   @override
@@ -2139,6 +2177,7 @@ class Product extends DataClass implements Insertable<Product> {
       'updated_at': serializer.toJson<String>(updatedAt),
       'deleted_at': serializer.toJson<String?>(deletedAt),
       'published_at': serializer.toJson<String?>(publishedAt),
+      'pending_retail': serializer.toJson<int?>(pendingRetail),
     };
   }
 
@@ -2156,6 +2195,7 @@ class Product extends DataClass implements Insertable<Product> {
     String? updatedAt,
     Value<String?> deletedAt = const Value.absent(),
     Value<String?> publishedAt = const Value.absent(),
+    Value<int?> pendingRetail = const Value.absent(),
   }) => Product(
     id: id.present ? id.value : this.id,
     name: name ?? this.name,
@@ -2174,6 +2214,9 @@ class Product extends DataClass implements Insertable<Product> {
     updatedAt: updatedAt ?? this.updatedAt,
     deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
     publishedAt: publishedAt.present ? publishedAt.value : this.publishedAt,
+    pendingRetail: pendingRetail.present
+        ? pendingRetail.value
+        : this.pendingRetail,
   );
   Product copyWithCompanion(ProductsCompanion data) {
     return Product(
@@ -2202,6 +2245,9 @@ class Product extends DataClass implements Insertable<Product> {
       publishedAt: data.publishedAt.present
           ? data.publishedAt.value
           : this.publishedAt,
+      pendingRetail: data.pendingRetail.present
+          ? data.pendingRetail.value
+          : this.pendingRetail,
     );
   }
 
@@ -2220,7 +2266,8 @@ class Product extends DataClass implements Insertable<Product> {
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('deletedAt: $deletedAt, ')
-          ..write('publishedAt: $publishedAt')
+          ..write('publishedAt: $publishedAt, ')
+          ..write('pendingRetail: $pendingRetail')
           ..write(')'))
         .toString();
   }
@@ -2240,6 +2287,7 @@ class Product extends DataClass implements Insertable<Product> {
     updatedAt,
     deletedAt,
     publishedAt,
+    pendingRetail,
   );
   @override
   bool operator ==(Object other) =>
@@ -2257,7 +2305,8 @@ class Product extends DataClass implements Insertable<Product> {
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt &&
           other.deletedAt == this.deletedAt &&
-          other.publishedAt == this.publishedAt);
+          other.publishedAt == this.publishedAt &&
+          other.pendingRetail == this.pendingRetail);
 }
 
 class ProductsCompanion extends UpdateCompanion<Product> {
@@ -2274,6 +2323,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
   final Value<String> updatedAt;
   final Value<String?> deletedAt;
   final Value<String?> publishedAt;
+  final Value<int?> pendingRetail;
   final Value<int> rowid;
   const ProductsCompanion({
     this.id = const Value.absent(),
@@ -2289,6 +2339,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     this.updatedAt = const Value.absent(),
     this.deletedAt = const Value.absent(),
     this.publishedAt = const Value.absent(),
+    this.pendingRetail = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ProductsCompanion.insert({
@@ -2305,6 +2356,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     this.updatedAt = const Value.absent(),
     this.deletedAt = const Value.absent(),
     this.publishedAt = const Value.absent(),
+    this.pendingRetail = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : name = Value(name);
   static Insertable<Product> custom({
@@ -2321,6 +2373,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     Expression<String>? updatedAt,
     Expression<String>? deletedAt,
     Expression<String>? publishedAt,
+    Expression<int>? pendingRetail,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -2337,6 +2390,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
       if (updatedAt != null) 'updated_at': updatedAt,
       if (deletedAt != null) 'deleted_at': deletedAt,
       if (publishedAt != null) 'published_at': publishedAt,
+      if (pendingRetail != null) 'pending_retail': pendingRetail,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -2355,6 +2409,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     Value<String>? updatedAt,
     Value<String?>? deletedAt,
     Value<String?>? publishedAt,
+    Value<int?>? pendingRetail,
     Value<int>? rowid,
   }) {
     return ProductsCompanion(
@@ -2371,6 +2426,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
       updatedAt: updatedAt ?? this.updatedAt,
       deletedAt: deletedAt ?? this.deletedAt,
       publishedAt: publishedAt ?? this.publishedAt,
+      pendingRetail: pendingRetail ?? this.pendingRetail,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -2417,6 +2473,9 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     if (publishedAt.present) {
       map['published_at'] = Variable<String>(publishedAt.value);
     }
+    if (pendingRetail.present) {
+      map['pending_retail'] = Variable<int>(pendingRetail.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -2439,6 +2498,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
           ..write('updatedAt: $updatedAt, ')
           ..write('deletedAt: $deletedAt, ')
           ..write('publishedAt: $publishedAt, ')
+          ..write('pendingRetail: $pendingRetail, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -6623,6 +6683,7 @@ typedef $ProductsCreateCompanionBuilder = ProductsCompanion Function({
   Value<String> updatedAt,
   Value<String?> deletedAt,
   Value<String?> publishedAt,
+  Value<int?> pendingRetail,
   Value<int> rowid,
 });
 typedef $ProductsUpdateCompanionBuilder = ProductsCompanion Function({
@@ -6639,6 +6700,7 @@ typedef $ProductsUpdateCompanionBuilder = ProductsCompanion Function({
   Value<String> updatedAt,
   Value<String?> deletedAt,
   Value<String?> publishedAt,
+  Value<int?> pendingRetail,
   Value<int> rowid,
 });
 
@@ -6783,6 +6845,11 @@ class $ProductsFilterComposer extends Composer<_$OwnerDatabase, Products> {
 
   ColumnFilters<String> get publishedAt => $composableBuilder(
     column: $table.publishedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get pendingRetail => $composableBuilder(
+    column: $table.pendingRetail,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -6953,6 +7020,11 @@ class $ProductsOrderingComposer extends Composer<_$OwnerDatabase, Products> {
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get pendingRetail => $composableBuilder(
+    column: $table.pendingRetail,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $CategoriesOrderingComposer get categoryId {
     final $CategoriesOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -7028,6 +7100,11 @@ class $ProductsAnnotationComposer extends Composer<_$OwnerDatabase, Products> {
 
   GeneratedColumn<String> get publishedAt => $composableBuilder(
     column: $table.publishedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get pendingRetail => $composableBuilder(
+    column: $table.pendingRetail,
     builder: (column) => column,
   );
 
@@ -7176,6 +7253,7 @@ class $ProductsTableManager
                 Value<String> updatedAt = const Value.absent(),
                 Value<String?> deletedAt = const Value.absent(),
                 Value<String?> publishedAt = const Value.absent(),
+                Value<int?> pendingRetail = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ProductsCompanion(
                 id: id,
@@ -7191,6 +7269,7 @@ class $ProductsTableManager
                 updatedAt: updatedAt,
                 deletedAt: deletedAt,
                 publishedAt: publishedAt,
+                pendingRetail: pendingRetail,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -7208,6 +7287,7 @@ class $ProductsTableManager
                 Value<String> updatedAt = const Value.absent(),
                 Value<String?> deletedAt = const Value.absent(),
                 Value<String?> publishedAt = const Value.absent(),
+                Value<int?> pendingRetail = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ProductsCompanion.insert(
                 id: id,
@@ -7223,6 +7303,7 @@ class $ProductsTableManager
                 updatedAt: updatedAt,
                 deletedAt: deletedAt,
                 publishedAt: publishedAt,
+                pendingRetail: pendingRetail,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

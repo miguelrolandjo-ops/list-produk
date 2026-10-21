@@ -212,6 +212,27 @@ final categoryCountsProvider = StreamProvider<CategoryCounts>((ref) async* {
   }
 });
 
+/// Retail price suggestions waiting for the owner (most urgent first),
+/// recomputed whenever products, prices, limits or settings change.
+final priceSuggestionsProvider = StreamProvider<List<PriceSuggestion>>((
+  ref,
+) async* {
+  final db = ref.watch(ownerDbProvider);
+  final service = ref.watch(productServiceProvider);
+  yield await service.pendingSuggestions();
+  final changes = db.tableUpdates(
+    TableUpdateQuery.onAllTables([
+      db.products,
+      db.supplierPrices,
+      db.marginThresholds,
+      db.settings,
+    ]),
+  );
+  await for (final _ in changes) {
+    yield await service.pendingSuggestions();
+  }
+});
+
 final productDetailProvider = FutureProvider.autoDispose
     .family<ProductDetail?, String>(
       (ref, id) => ref.watch(productServiceProvider).detail(id),

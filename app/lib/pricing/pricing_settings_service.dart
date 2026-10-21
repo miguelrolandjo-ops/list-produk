@@ -148,6 +148,13 @@ class PricingSettingsService {
         await (_db.update(_db.products)..where((p) => p.id.equals(c.productId)))
             .write(ProductsCompanion(retailPrice: Value(c.newPrice)));
       }
+      // Every calculated price was just brought up to date (and previewed by
+      // the owner), so a pending suggestion has nothing left to propose.
+      await _db.customUpdate(
+        'UPDATE products SET pending_retail = NULL '
+        'WHERE pending_retail IS NOT NULL AND retail_is_override = 0',
+        updates: {_db.products},
+      );
     });
     _products.invalidatePricingConfig();
     return preview.changes.length;

@@ -214,9 +214,16 @@ int calcRetail(int supply, List<(int, int)> anchors,
 
 **When to recalculate a product's retail price** (skip if `retail_is_override = 1`):
 
-- After saving a PO review or a manual add that inserts `supplier_prices`.
+- After saving a PO review, a manual add or a product edit that inserts
+  `supplier_prices`: the product's first price sets `retail_price`; any later change
+  only stores the calculated price in `products.pending_retail` (when it differs from
+  `retail_price`) for the owner to confirm (`applySuggestion`) or refuse
+  (`dismissSuggestion`). The next supplier price change recomputes it, which is the
+  only way a refused suggestion comes back. `pending_retail` is local only and never
+  published; applying it changes `retail_price`, which is published as usual.
 - After anchors or settings change: first compute all new prices and show the preview
-  ("23 products will change"), then write them in one transaction.
+  ("23 products will change"), then write them in one transaction (this also clears
+  every `pending_retail`).
 
 The supply price that drives it comes from `current_supplier_prices` using
 `settings.basis` (`MAX`, `MIN`, or latest `observed_at`).

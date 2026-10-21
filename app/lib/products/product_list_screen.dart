@@ -9,6 +9,7 @@ import '../core/providers.dart';
 import '../backup/backup_screen.dart' show daysAgo;
 import '../backup/backup_service.dart' show backupReminderDue;
 import '../core/rupiah.dart';
+import 'product_service.dart' show PriceSuggestion;
 import 'add_product_screen.dart' show productUnits;
 import 'name_field.dart';
 
@@ -147,6 +148,12 @@ class _ProductListScreenState extends ConsumerState<ProductListScreen> {
       productsProvider((query: _query, categoryId: _categoryId)),
     );
     final display = ref.watch(displayPrefsProvider);
+    // Retail price suggestions waiting for a yes or no. The bell counts only
+    // the urgent ones (selling below the margin limit now).
+    final suggestions =
+        ref.watch(priceSuggestionsProvider).value ?? const <PriceSuggestion>[];
+    final suggested = {for (final s in suggestions) s.productId};
+    final urgent = suggestions.where((s) => s.belowMargin).length;
     final warned = display.showMarginWarning
         ? ref.watch(marginWarningsProvider).value ?? const <String>{}
         : const <String>{};
@@ -194,6 +201,16 @@ class _ProductListScreenState extends ConsumerState<ProductListScreen> {
             : AppBar(
                 title: const Text('Harga Toko'),
                 actions: [
+                  if (suggestions.isNotEmpty)
+                    IconButton(
+                      tooltip: 'Saran harga',
+                      icon: Badge(
+                        isLabelVisible: urgent > 0,
+                        label: Text('$urgent'),
+                        child: const Icon(Icons.notifications_outlined),
+                      ),
+                      onPressed: () => context.push('/saran-harga'),
+                    ),
                   IconButton(
                     tooltip: 'Ubah massal',
                     icon: const Icon(Icons.checklist),
@@ -284,6 +301,16 @@ class _ProductListScreenState extends ConsumerState<ProductListScreen> {
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            if (suggested.contains(p.id))
+                              Padding(
+                                padding: const EdgeInsets.only(right: 6),
+                                child: Icon(
+                                  Icons.price_change_outlined,
+                                  size: 18,
+                                  color: Theme.of(context).colorScheme.tertiary,
+                                  semanticLabel: 'Ada saran harga',
+                                ),
+                              ),
                             if (warned.contains(p.id))
                               Padding(
                                 padding: const EdgeInsets.only(right: 6),

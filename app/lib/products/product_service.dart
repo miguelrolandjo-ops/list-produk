@@ -49,6 +49,34 @@ class SupplierPriceEntry {
   final DateTime observedAt;
 }
 
+/// A retail price the app proposes after a supplier price changed, waiting
+/// for the owner's yes or no.
+class PriceSuggestion {
+  const PriceSuggestion({
+    required this.productId,
+    required this.name,
+    required this.currentRetail,
+    required this.suggestedRetail,
+    required this.marginSupply,
+    required this.belowMargin,
+  });
+
+  final String productId;
+  final String name;
+  final int currentRetail;
+  final int suggestedRetail;
+
+  /// The supply price the margin is judged against (settings.margin_basis).
+  final int? marginSupply;
+
+  /// Keeping [currentRetail] now sells below the margin limit: the urgent
+  /// kind of suggestion.
+  final bool belowMargin;
+
+  /// Positive: the suggestion raises the price.
+  int get change => suggestedRetail - currentRetail;
+}
+
 class ProductDetail {
   const ProductDetail({
     required this.product,
@@ -228,9 +256,10 @@ class ProductService {
     return productId;
   }
 
-  /// Stores a new supplier price (history is never overwritten), then
-  /// recalculates the product's retail price unless it is an override.
-  /// Returns the product's retail price afterwards.
+  /// Stores a new supplier price (history is never overwritten), then lets
+  /// [_proposeRetail] decide what it means for the retail price: a first price
+  /// sets it, a later change only proposes a new one for the owner to confirm.
+  /// Returns the product's retail price afterwards (unchanged by a proposal).
   Future<int?> recordSupplierPrice(
     String productId,
     String supplierId,
@@ -254,30 +283,115 @@ class ProductService {
               ),
             ),
           );
-      return recalcRetail(productId);
+      return _proposeRetail(productId);
     });
   }
 
-  /// Recomputes retail_price from the supplier prices, using settings.basis.
-  /// Products with retail_is_override = 1 are never touched. Returns the
-  /// product's retail price after the call.
-  Future<int?> recalcRetail(String productId) async {
+  /// Decides what a supplier price change means for the retail price, and
+  /// returns the product's retail price afterwards (which this never changes
+  /// except for a product's very first price).
+  ///
+  /// - No retail price yet: the calculated price is set directly. There is
+  ///   no price of the owner's to protect.
+  /// - Manual price (retail_is_override = 1): left alone, nothing proposed.
+  /// - Otherwise the calculated ("proper") price, higher or lower, is stored in
+  ///   pending_retail when it differs from the current one, for the owner to
+  ///   confirm ([applySuggestion]) or refuse ([dismissSuggestion]); when it
+  ///   equals the current price, nothing is pending.
+  ///
+  /// Running again after the next price change replaces the pending value, so a
+  /// refused suggestion only comes back when a price changes again.
+  Future<int?> _proposeRetail(String productId) async {
     final product = await (_db.select(
       _db.products,
     )..where((p) => p.id.equals(productId))).getSingle();
-    if (product.retailIsOverride == 1) return product.retailPrice;
 
+    Future<void> setPending(int? value) async {
+      if (product.pendingRetail == value) return;
+      await (_db.update(_db.products)..where((p) => p.id.equals(productId)))
+          .write(ProductsCompanion(pendingRetail: Value(value)));
+    }
+
+    if (product.retailIsOverride == 1) {
+      await setPending(null);
+      return product.retailPrice;
+    }
     final supply = await _basisSupply(productId, await _settings());
     if (supply == null) return product.retailPrice;
+    final proper = await _calc(supply);
 
-    final retail = await _calc(supply);
-    // Skip a no-op write: the products_touch trigger would mark the product
-    // as changed and re-publish it for nothing.
-    if (retail != product.retailPrice) {
+    if (product.retailPrice == null) {
       await (_db.update(_db.products)..where((p) => p.id.equals(productId)))
-          .write(ProductsCompanion(retailPrice: Value(retail)));
+          .write(
+            ProductsCompanion(
+              retailPrice: Value(proper),
+              pendingRetail: const Value(null),
+            ),
+          );
+      return proper;
     }
-    return retail;
+    await setPending(proper == product.retailPrice ? null : proper);
+    return product.retailPrice;
+  }
+
+  /// Retail price suggestions waiting for the owner, most urgent first (those
+  /// that now sell below the margin limit), then by name.
+  Future<List<PriceSuggestion>> pendingSuggestions() async {
+    final rows =
+        await (_db.select(_db.products)..where(
+              (p) =>
+                  p.deletedAt.isNull() &
+                  p.pendingRetail.isNotNull() &
+                  p.retailPrice.isNotNull() &
+                  p.retailIsOverride.equals(0),
+            ))
+            .get();
+    if (rows.isEmpty) return const [];
+    final ranges = await marginThresholds();
+    final supply = await marginSupplyPrices();
+    return [
+      for (final p in rows)
+        PriceSuggestion(
+          productId: p.id!,
+          name: p.name,
+          currentRetail: p.retailPrice!,
+          suggestedRetail: p.pendingRetail!,
+          marginSupply: supply[p.id],
+          belowMargin:
+              supply[p.id] != null &&
+              isBelowMargin(supply[p.id]!, p.retailPrice, ranges),
+        ),
+    ]..sort((a, b) {
+      if (a.belowMargin != b.belowMargin) return a.belowMargin ? -1 : 1;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+  }
+
+  /// The owner said yes: the suggested price becomes the retail price (still
+  /// a calculated one, so later price changes propose again). Does nothing if
+  /// there is nothing pending.
+  Future<void> applySuggestion(String productId) async {
+    final product = await (_db.select(
+      _db.products,
+    )..where((p) => p.id.equals(productId))).getSingleOrNull();
+    final pending = product?.pendingRetail;
+    if (product == null || pending == null || product.retailIsOverride == 1) {
+      return;
+    }
+    await (_db.update(_db.products)..where((p) => p.id.equals(productId)))
+        .write(
+          ProductsCompanion(
+            retailPrice: Value(pending),
+            pendingRetail: const Value(null),
+          ),
+        );
+  }
+
+  /// The owner said no: the retail price stays and the suggestion goes away.
+  /// It only returns after the next supplier price change.
+  Future<void> dismissSuggestion(String productId) async {
+    await (_db.update(_db.products)..where((p) => p.id.equals(productId)))
+        .write(const ProductsCompanion(pendingRetail: Value(null)));
   }
 
   /// Margin limits per supply range, lowest range first.
@@ -505,6 +619,7 @@ class ProductService {
       ProductsCompanion(
         retailPrice: Value(price),
         retailIsOverride: const Value(1),
+        pendingRetail: const Value(null), // a manual price needs no suggestion
       ),
     );
   }
@@ -521,15 +636,12 @@ class ProductService {
     );
   }
 
-  /// Undoes [deleteProduct]. While deleted it was skipped by price
-  /// recalculations, so its retail price is recalculated now (manual prices
-  /// stay as they are).
+  /// Undoes [deleteProduct]: the product comes back exactly as it was, prices
+  /// and any waiting (or already refused) retail suggestion included. Restoring
+  /// is not a supplier price change, so it never asks anything new.
   Future<void> restoreProduct(String productId) async {
-    await _db.transaction(() async {
-      await (_db.update(_db.products)..where((p) => p.id.equals(productId)))
-          .write(const ProductsCompanion(deletedAt: Value(null)));
-      await recalcRetail(productId);
-    });
+    await (_db.update(_db.products)..where((p) => p.id.equals(productId)))
+        .write(const ProductsCompanion(deletedAt: Value(null)));
   }
 
   /// The supply price each product's margin is judged against, per

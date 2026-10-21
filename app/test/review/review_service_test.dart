@@ -95,11 +95,11 @@ void main() {
     expect(price.read<int>('unit_price'), 12000);
     expect(price.read<String>('observed_at'), startsWith('2026-10-10'));
 
-    // basis 'highest' by default: 12.000 is now the basis supply.
-    final retail = (await q('SELECT retail_price FROM products WHERE id = ?', [pid]))
-        .single
-        .read<int>('retail_price');
-    expect(retail, (await products.preview(12000)).retail);
+    // basis 'highest' by default: 12.000 is now the basis supply, so a new
+    // retail price is proposed, but the current one stays until it is confirmed.
+    final prices = (await q('SELECT retail_price, pending_retail FROM products WHERE id = ?', [pid])).single;
+    expect(prices.read<int>('retail_price'), 15000);
+    expect(prices.read<int>('pending_retail'), (await products.preview(12000)).retail);
 
     final line = (await q('SELECT * FROM po_lines WHERE id = ?', ['l1'])).single;
     expect(line.read<String>('match_status'), 'confirmed');

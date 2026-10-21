@@ -114,6 +114,7 @@ class BulkAdjustService {
         )..where((p) => p.id.equals(c.productId))).write(
           ProductsCompanion(
             retailPrice: Value(c.newPrice),
+            pendingRetail: const Value(null), // now a manual price
             retailIsOverride: const Value(1),
           ),
         );

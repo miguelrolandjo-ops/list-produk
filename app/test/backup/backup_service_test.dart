@@ -119,6 +119,7 @@ void main() {
     final raw = sqlite.sqlite3.open(old.path);
     raw.execute('ALTER TABLE settings DROP COLUMN margin_basis');
     raw.execute('ALTER TABLE settings DROP COLUMN margin_avg_count');
+    raw.execute('ALTER TABLE products DROP COLUMN pending_retail');
     raw.execute("UPDATE settings SET basis = 'lowest'");
     raw.execute('PRAGMA user_version = 1');
     raw.close();

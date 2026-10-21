@@ -145,6 +145,26 @@ adjustable by range, with the ability to override individual products.
   unless the owner chooses "reset to default."
 - When anchors change, the app shows a preview of affected products before applying.
 
+### Retail price suggestions after a supplier price change
+- A change in a supplier price (from a PO review, from editing the product, or by
+  hand) never changes a retail price on its own. The app calculates the "proper"
+  retail price, higher or lower, and **proposes** it. The owner confirms first.
+- Exceptions: a product's very first price sets its retail price directly (there
+  is no price of the owner's to protect), and products with a manual price get no
+  suggestion (rule above).
+- The suggestion is shown on the product detail ("Harga supplier berubah ... disarankan
+  Rp X, naik/turun Rp Y dari Rp Z", with Terapkan / Tidak), marked on the product list,
+  and listed on the "Saran harga" screen. A bell on the list appears when there are
+  suggestions; its number counts only the urgent ones: products whose current retail
+  price now sells below the margin limit.
+- **Yes (Terapkan):** the suggested price becomes the retail price (still a calculated
+  one, so later changes propose again). **No (Tidak):** the retail price stays and the
+  suggestion is dropped; it is not offered again until the next supplier price change.
+- Saving new anchors or markup (already previewed and confirmed) brings every
+  calculated price up to date and clears pending suggestions. Bulk adjust saves
+  manual prices and clears them too. Deleting and restoring a product is a plain undo
+  and asks nothing new.
+
 ---
 
 ## Story 4: Share catalog with employees

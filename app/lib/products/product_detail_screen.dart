@@ -72,6 +72,43 @@ class ProductDetailScreen extends ConsumerWidget {
       );
   }
 
+  Future<void> _applySuggestion(
+    BuildContext context,
+    WidgetRef ref,
+    ProductDetail detail,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final price = detail.product.pendingRetail;
+    await ref.read(productServiceProvider).applySuggestion(productId);
+    ref.invalidate(productDetailProvider(productId));
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            price == null
+                ? 'Saran harga sudah tidak berlaku'
+                : 'Harga jual diubah menjadi ${formatRupiah(price)}',
+          ),
+        ),
+      );
+  }
+
+  Future<void> _dismissSuggestion(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    await ref.read(productServiceProvider).dismissSuggestion(productId);
+    ref.invalidate(productDetailProvider(productId));
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Harga jual tidak diubah. Ditanyakan lagi saat harga supplier berubah.',
+          ),
+        ),
+      );
+  }
+
   Future<void> _showHistory(BuildContext context, WidgetRef ref) async {
     final history = await ref
         .read(productServiceProvider)
@@ -151,6 +188,8 @@ class ProductDetailScreen extends ConsumerWidget {
             onHistory: () => _showHistory(context, ref),
             onEdit: () => _editPrice(context, ref, d),
             onMargin: () => context.push('/pengaturan/harga'),
+            onApplySuggestion: () => _applySuggestion(context, ref, d),
+            onDismissSuggestion: () => _dismissSuggestion(context, ref),
           );
         },
       ),
@@ -224,6 +263,8 @@ class _Body extends StatelessWidget {
     required this.onHistory,
     required this.onEdit,
     required this.onMargin,
+    required this.onApplySuggestion,
+    required this.onDismissSuggestion,
   });
 
   final ProductDetail detail;
@@ -232,6 +273,10 @@ class _Body extends StatelessWidget {
 
   /// Opens the pricing rules (Aturan harga).
   final VoidCallback onMargin;
+
+  /// Yes / no to the suggested retail price (shown only when there is one).
+  final VoidCallback onApplySuggestion;
+  final VoidCallback onDismissSuggestion;
 
   @override
   Widget build(BuildContext context) {
@@ -260,6 +305,19 @@ class _Body extends StatelessWidget {
               const SizedBox(height: 4),
               Text(subtitle, style: theme.textTheme.bodyMedium),
               const SizedBox(height: 16),
+              if (p.pendingRetail != null &&
+                  p.retailIsOverride == 0 &&
+                  retail != null)
+                _SuggestionCard(
+                  current: retail,
+                  suggested: p.pendingRetail!,
+                  marginAtSuggested: supply == null
+                      ? null
+                      : marginPct(supply, p.pendingRetail),
+                  belowLimitNow: belowLimit,
+                  onApply: onApplySuggestion,
+                  onDismiss: onDismissSuggestion,
+                ),
               Card(
                 clipBehavior: Clip.antiAlias,
                 // Tapping the card edits the retail price, like "Ubah harga".
@@ -389,6 +447,94 @@ class _Body extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// "Harga supplier berubah": the app's proposed retail price, higher or lower,
+/// waiting for a yes or no. Nothing changes until the owner says yes.
+class _SuggestionCard extends StatelessWidget {
+  const _SuggestionCard({
+    required this.current,
+    required this.suggested,
+    required this.marginAtSuggested,
+    required this.belowLimitNow,
+    required this.onApply,
+    required this.onDismiss,
+  });
+
+  final int current;
+  final int suggested;
+  final double? marginAtSuggested;
+  final bool belowLimitNow;
+  final VoidCallback onApply;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final up = suggested > current;
+    final change = formatRupiah((suggested - current).abs());
+    return Card(
+      color: scheme.tertiaryContainer,
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.price_change_outlined,
+                  color: scheme.onTertiaryContainer,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Harga supplier berubah',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: scheme.onTertiaryContainer,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Harga jual disarankan ${formatRupiah(suggested)} '
+              '(${up ? 'naik' : 'turun'} $change dari ${formatRupiah(current)}).',
+              style: TextStyle(color: scheme.onTertiaryContainer),
+            ),
+            if (marginAtSuggested != null)
+              Text(
+                'Margin dengan harga ini ${_pct.format(marginAtSuggested)}%',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: scheme.onTertiaryContainer,
+                ),
+              ),
+            if (belowLimitNow)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'Dengan harga sekarang, margin di bawah batas.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: scheme.error,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(onPressed: onDismiss, child: const Text('Tidak')),
+                const SizedBox(width: 8),
+                FilledButton(onPressed: onApply, child: const Text('Terapkan')),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

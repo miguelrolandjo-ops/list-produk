@@ -63,7 +63,10 @@ CREATE TABLE products (
   created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   updated_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   deleted_at         TEXT,                      -- soft delete, so employees learn about removals
-  published_at       TEXT                       -- last successful publish_catalog()
+  published_at       TEXT,                      -- last successful publish_catalog()
+  -- Retail price the app proposes after a supplier price change, waiting for
+  -- the owner's yes/no. NULL = nothing to confirm. Never published.
+  pending_retail     INTEGER CHECK (pending_retail IS NULL OR pending_retail > 0)
 );
 CREATE INDEX products_name ON products (name);
 

@@ -13,7 +13,7 @@ class OwnerDatabase extends _$OwnerDatabase {
   // Bump this and add an onUpgrade step for every schema change.
   // Real data lives on the owner's phone, so reinstalling is never an option.
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -26,6 +26,14 @@ class OwnerDatabase extends _$OwnerDatabase {
     onUpgrade: (m, from, to) async {
       // Each step must keep existing data: the owner's phone holds the real
       // catalog, so reinstalling is never an option.
+      if (from < 3) {
+        // Retail price proposed after a supplier price change, awaiting the
+        // owner's confirmation.
+        await customStatement(
+          'ALTER TABLE products ADD COLUMN pending_retail INTEGER '
+          'CHECK (pending_retail IS NULL OR pending_retail > 0)',
+        );
+      }
       if (from < 2) {
         // Margin warning basis (separate from the retail basis).
         await customStatement(

@@ -122,6 +122,7 @@ void main() {
     test('an older expensive price stops mattering under "latest"', () async {
       final id = await addProduct('Kabel', 'A', 20000, t1); // old, expensive
       await price(id, 'A', 9500, t3); // newest
+      await products.applySuggestion(id); // the owner confirms: retail 15.000
       await setMargin('latest');
       expect(await margins.productsBelowMargin(), isEmpty);
       // The average still remembers the expensive one.
@@ -158,41 +159,84 @@ void main() {
     });
   });
 
-  test('upgrading a version 1 database adds the margin settings and keeps data', () async {
-    // A phone that still has the version 1 settings table, with real values.
-    final db = OwnerDatabase(
-      NativeDatabase.memory(
-        setup: (raw) {
-          raw.execute('''
-            CREATE TABLE settings (
-              id INTEGER PRIMARY KEY CHECK (id = 1),
-              store_id TEXT,
-              min_retail INTEGER NOT NULL DEFAULT 5000,
-              round_to INTEGER NOT NULL DEFAULT 5000 CHECK (round_to > 0),
-              above_markup_pct REAL NOT NULL DEFAULT 30,
-              basis TEXT NOT NULL DEFAULT 'highest'
-                CHECK (basis IN ('highest', 'lowest', 'latest')),
-              last_backup_at TEXT
-            )''');
-          raw.execute("INSERT INTO settings (id, basis, above_markup_pct) VALUES (1, 'lowest', 42)");
-          raw.execute('PRAGMA user_version = 1');
-        },
-      ),
-    );
-    addTearDown(db.close);
+  group('upgrading an older database keeps what the owner has', () {
+    // The tables an old phone has. Only what the upgrades touch matters here.
+    const settingsV1 = '''
+      CREATE TABLE settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        store_id TEXT,
+        min_retail INTEGER NOT NULL DEFAULT 5000,
+        round_to INTEGER NOT NULL DEFAULT 5000 CHECK (round_to > 0),
+        above_markup_pct REAL NOT NULL DEFAULT 30,
+        basis TEXT NOT NULL DEFAULT 'highest'
+          CHECK (basis IN ('highest', 'lowest', 'latest')),
+        last_backup_at TEXT
+      )''';
+    const productsV2 = '''
+      CREATE TABLE products (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        retail_price INTEGER,
+        retail_is_override INTEGER NOT NULL DEFAULT 0
+      )''';
 
-    final row = (await db
-            .customSelect('SELECT basis, above_markup_pct, margin_basis, margin_avg_count FROM settings')
-            .getSingle())
-        .data;
-    expect(row['basis'], 'lowest'); // existing choice kept
-    expect(row['above_markup_pct'], 42);
-    expect(row['margin_basis'], 'latest'); // new defaults
-    expect(row['margin_avg_count'], 3);
-    // The new CHECK constraints came along with the columns.
-    await expectLater(
-      db.customStatement("UPDATE settings SET margin_basis = 'highest'"),
-      throwsA(anything),
-    );
+    OwnerDatabase oldDatabase(void Function(dynamic raw) setup) =>
+        OwnerDatabase(NativeDatabase.memory(setup: setup));
+
+    test('version 1 gets the margin settings and the price suggestion column', () async {
+      final db = oldDatabase((raw) {
+        raw.execute(settingsV1);
+        raw.execute("INSERT INTO settings (id, basis, above_markup_pct) VALUES (1, 'lowest', 42)");
+        raw.execute(productsV2);
+        raw.execute("INSERT INTO products (id, name, retail_price) VALUES ('p1', 'Kabel', 15000)");
+        raw.execute('PRAGMA user_version = 1');
+      });
+      addTearDown(db.close);
+
+      final s = (await db
+              .customSelect('SELECT basis, above_markup_pct, margin_basis, margin_avg_count FROM settings')
+              .getSingle())
+          .data;
+      expect(s['basis'], 'lowest'); // existing choice kept
+      expect(s['above_markup_pct'], 42);
+      expect(s['margin_basis'], 'latest'); // new defaults
+      expect(s['margin_avg_count'], 3);
+      final p = (await db.customSelect('SELECT name, retail_price, pending_retail FROM products').getSingle()).data;
+      expect(p['name'], 'Kabel');
+      expect(p['retail_price'], 15000);
+      expect(p['pending_retail'], isNull); // nothing to confirm yet
+      // The new CHECK constraints came along with the columns.
+      await expectLater(
+        db.customStatement("UPDATE settings SET margin_basis = 'highest'"),
+        throwsA(anything),
+      );
+      await expectLater(
+        db.customStatement("UPDATE products SET pending_retail = 0"),
+        throwsA(anything),
+      );
+    });
+
+    test('version 2 only gets the price suggestion column', () async {
+      final db = oldDatabase((raw) {
+        raw.execute(settingsV1.replaceFirst(
+          'last_backup_at TEXT',
+          "last_backup_at TEXT, margin_basis TEXT NOT NULL DEFAULT 'average', "
+              'margin_avg_count INTEGER NOT NULL DEFAULT 5',
+        ));
+        raw.execute('INSERT INTO settings (id) VALUES (1)');
+        raw.execute(productsV2);
+        raw.execute("INSERT INTO products (id, name, retail_price) VALUES ('p1', 'Kabel', 15000)");
+        raw.execute('PRAGMA user_version = 2');
+      });
+      addTearDown(db.close);
+
+      // Their own margin choice is not reset to the default.
+      final s = (await db.customSelect('SELECT margin_basis, margin_avg_count FROM settings').getSingle()).data;
+      expect(s['margin_basis'], 'average');
+      expect(s['margin_avg_count'], 5);
+      final p = (await db.customSelect('SELECT retail_price, pending_retail FROM products').getSingle()).data;
+      expect(p['retail_price'], 15000);
+      expect(p['pending_retail'], isNull);
+    });
   });
 }

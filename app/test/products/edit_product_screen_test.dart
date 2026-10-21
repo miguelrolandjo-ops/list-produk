@@ -85,7 +85,7 @@ void main() {
     final rows = await tester.runAsync(
       () => db
           .customSelect(
-            'SELECT p.name, p.unit, c.name AS category, p.retail_price '
+            'SELECT p.name, p.unit, c.name AS category, p.retail_price, p.pending_retail '
             'FROM products p LEFT JOIN categories c ON c.id = p.category_id',
           )
           .get(),
@@ -97,7 +97,10 @@ void main() {
     final retail = await tester.runAsync(
       () => ProductService(db).preview(12000),
     );
-    expect(p.read<int>('retail_price'), retail!.retail);
+    // The retail price is not changed behind the owner's back: the new one is
+    // proposed and waits for confirmation.
+    expect(p.read<int>('retail_price'), 15000);
+    expect(p.read<int>('pending_retail'), retail!.retail);
     final prices = await tester.runAsync(
       () => db.customSelect('SELECT unit_price FROM supplier_prices').get(),
     );

@@ -145,26 +145,30 @@ void main() {
       supplierB = await supplierId('B');
     });
 
-    test('highest basis uses the higher price', () async {
+    test('highest basis proposes the price for the higher supplier price', () async {
       final retail = await service.recordSupplierPrice(id, supplierB, 45000);
-      expect(retail, 70000); // 45.000 -> 70.000
-      expect((await product(id)).retailPrice, 70000);
+      expect(retail, 15000); // unchanged until the owner confirms
+      expect((await product(id)).retailPrice, 15000);
+      expect((await product(id)).pendingRetail, 70000); // 45.000 -> 70.000
     });
 
     test('lowest basis uses the lower price', () async {
       await setBasis('lowest');
       final retail = await service.recordSupplierPrice(id, supplierB, 45000);
       expect(retail, 15000);
+      expect((await product(id)).pendingRetail, isNull); // the lower one drives it
     });
 
     test('latest basis uses the most recently observed price', () async {
       await setBasis('latest');
       await service.recordSupplierPrice(id, supplierB, 45000); // newest
-      expect((await product(id)).retailPrice, 70000);
+      expect((await product(id)).pendingRetail, 70000);
 
-      // Supplier A quotes again later, lower: A's new price is now the latest.
+      // Supplier A quotes again later, lower: A's new price is now the latest,
+      // which is the price the product already has, so nothing is left to confirm.
       await service.recordSupplierPrice(id, await supplierId('A'), 9500);
       expect((await product(id)).retailPrice, 15000);
+      expect((await product(id)).pendingRetail, isNull);
     });
 
     test(
@@ -179,6 +183,7 @@ void main() {
         ); // B drops its price
         // Highest of current prices: A 9.500 vs B 3.000 -> 15.000
         expect((await product(id)).retailPrice, 15000);
+        expect((await product(id)).pendingRetail, isNull);
 
         final history = await (db.select(
           db.supplierPrices,
@@ -207,13 +212,14 @@ void main() {
   });
 
   test(
-    'recalculating to the same price does not mark the product changed',
+    'a supplier price that leaves the retail price as it is does not mark the product changed',
     () async {
       final id = await service.addManual(input());
       final before = (await product(id)).updatedAt;
       await Future<void>.delayed(const Duration(milliseconds: 5));
-      await service.recalcRetail(id);
+      await service.recordSupplierPrice(id, await supplierId('CV Maju'), 9500);
       expect((await product(id)).updatedAt, before);
+      expect((await product(id)).pendingRetail, isNull);
     },
   );
 
@@ -278,7 +284,7 @@ void main() {
       expect(rows.single.read<int>('is_deleted'), 1);
     });
 
-    test('restoreProduct brings it back with a recalculated price', () async {
+    test('restoreProduct brings it back exactly as it was', () async {
       final id = await service.addManual(input()); // 9.500 -> 15.000
       final manual = await service.addManual(
         input(supply: 9500, retail: 17500),
@@ -296,7 +302,11 @@ void main() {
       await service.restoreProduct(id);
       await service.restoreProduct(manual);
       expect((await product(id)).deletedAt, isNull);
-      expect((await product(id)).retailPrice, 20000);
+      // Restoring is a plain undo: no silent recalculation, no new question.
+      // (Known limit: a product deleted across a pricing-rule change comes back
+      // with its old price until its next supplier price change.)
+      expect((await product(id)).retailPrice, 15000);
+      expect((await product(id)).pendingRetail, isNull);
       expect((await product(manual)).retailPrice, 17500); // override kept
       expect(await service.detail(id), isNotNull);
     });
@@ -322,7 +332,7 @@ void main() {
       expect(p.categoryId, isNull);
     });
 
-    test('a changed supplier price adds history and recalculates retail', () async {
+    test('a changed supplier price adds history and proposes a new retail price', () async {
       final id = await service.addManual(input(supply: 9500)); // 15.000
       final sup = await supplierId('CV Maju');
       await service.updateProduct(
@@ -332,7 +342,8 @@ void main() {
         supplyPrices: {sup: 12000},
       );
       expect((await service.priceHistory(id)).map((e) => e.unitPrice), [12000, 9500]);
-      expect((await product(id)).retailPrice, (await service.preview(12000)).retail);
+      expect((await product(id)).retailPrice, 15000); // unchanged until confirmed
+      expect((await product(id)).pendingRetail, (await service.preview(12000)).retail);
     });
 
     test('an unchanged supplier price adds no history', () async {
@@ -508,6 +519,8 @@ void main() {
         await db.customSelect('SELECT id FROM products_to_publish').get(),
         isEmpty,
       );
+      // updated_at has millisecond precision: let it move past published_at.
+      await Future<void>.delayed(const Duration(milliseconds: 5));
       await service.deleteCategory(await categoryId('Kabel'));
       expect(
         (await db.customSelect('SELECT id FROM products_to_publish').get())
