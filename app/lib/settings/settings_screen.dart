@@ -62,6 +62,13 @@ class SettingsScreen extends ConsumerWidget {
             onTap: () => context.push('/kategori'),
           ),
           ListTile(
+            leading: const Icon(Icons.storefront_outlined),
+            title: const Text('Kelola supplier'),
+            subtitle: const Text('Lihat dan hapus supplier'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/supplier'),
+          ),
+          ListTile(
             leading: const Icon(Icons.backup_outlined),
             title: const Text('Cadangkan data'),
             subtitle: const Text('Cadangkan atau pulihkan dari file'),

@@ -221,6 +221,13 @@ int calcRetail(int supply, List<(int, int)> anchors,
   (`dismissSuggestion`). The next supplier price change recomputes it, which is the
   only way a refused suggestion comes back. `pending_retail` is local only and never
   published; applying it changes `retail_price`, which is published as usual.
+- When a supplier is deleted, its prices are removed and each affected product goes
+  through the same rule (propose, never apply).
+- `current_supplier_prices` takes the latest `observed_at` per product and supplier and
+  breaks ties with `rowid` (schema version 4): without that, a second PO with the same
+  date was ignored by the supplier list and by suggestions.
+- `products.retail_prev` / `retail_changed_at` are kept by the `products_retail_changed`
+  trigger whenever `retail_price` changes (used for "Diubah 12 hari lalu").
 - After anchors or settings change: first compute all new prices and show the preview
   ("23 products will change"), then write them in one transaction (this also clears
   every `pending_retail`).

@@ -4,6 +4,7 @@ import '../products/add_product_screen.dart';
 import '../backup/backup_screen.dart';
 import '../products/edit_product_screen.dart';
 import '../products/manage_categories_screen.dart';
+import '../products/manage_suppliers_screen.dart';
 import '../products/price_suggestions_screen.dart';
 import '../products/product_detail_screen.dart';
 import '../products/product_list_screen.dart';
@@ -22,6 +23,7 @@ final appRouter = GoRouter(
       builder: (_, _) => const BackupScreen(),
     ),
     GoRoute(path: '/saran-harga', builder: (_, _) => const PriceSuggestionsScreen()),
+    GoRoute(path: '/supplier', builder: (_, _) => const ManageSuppliersScreen()),
     GoRoute(path: '/kategori', builder: (_, _) => const ManageCategoriesScreen()),
     GoRoute(path: '/pengaturan', builder: (_, _) => const SettingsScreen()),
     GoRoute(

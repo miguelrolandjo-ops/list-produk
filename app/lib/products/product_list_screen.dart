@@ -457,6 +457,14 @@ class _CategoryDrawer extends ConsumerWidget {
                       onManage();
                     },
                   ),
+                  ListTile(
+                    leading: const Icon(Icons.storefront_outlined),
+                    title: const Text('Kelola supplier'),
+                    onTap: () {
+                      Navigator.pop(context); // close the drawer
+                      context.push('/supplier');
+                    },
+                  ),
                 ],
               ),
       ),

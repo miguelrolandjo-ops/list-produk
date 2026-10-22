@@ -348,7 +348,10 @@ class ProductService {
       return product.retailPrice;
     }
     final supply = await _basisSupply(productId, await _settings());
-    if (supply == null) return product.retailPrice;
+    if (supply == null) {
+      await setPending(null); // no supply price left to base a suggestion on
+      return product.retailPrice;
+    }
     final proper = await _calc(supply);
 
     if (product.retailPrice == null) {
@@ -571,6 +574,61 @@ class ProductService {
           observedAt: DateTime.parse(r.observedAt).toLocal(),
         ),
     ];
+  }
+
+  /// Deletes a supplier and everything that only makes sense with it: its
+  /// price records (the price history from that supplier) and the names it
+  /// used for products. Products are kept, and so are past POs (which just lose
+  /// their supplier). Returns how many products had a price from this supplier.
+  ///
+  /// If the supplier was what drove a product's retail price, the new price is
+  /// proposed for the owner to confirm, not applied: removing a supplier is a
+  /// supplier price change like any other.
+  Future<int> deleteSupplier(String supplierId) {
+    return _db.transaction(() async {
+      final affected = [
+        for (final r in await _db
+            .customSelect(
+              'SELECT DISTINCT sp.product_id AS id FROM supplier_prices sp '
+              'JOIN products p ON p.id = sp.product_id '
+              'WHERE sp.supplier_id = ? AND p.deleted_at IS NULL',
+              variables: [Variable.withString(supplierId)],
+            )
+            .get())
+          r.read<String>('id'),
+      ];
+
+      await _db.customUpdate(
+        'DELETE FROM supplier_prices WHERE supplier_id = ?',
+        variables: [Variable.withString(supplierId)],
+        updates: {_db.supplierPrices},
+        updateKind: UpdateKind.delete,
+      );
+      await _db.customUpdate(
+        'DELETE FROM product_aliases WHERE supplier_id = ?',
+        variables: [Variable.withString(supplierId)],
+        updates: {_db.productAliases},
+        updateKind: UpdateKind.delete,
+      );
+      // Child rows are cleaned explicitly: SQLite only cascades with foreign
+      // keys switched on, and they are not.
+      await _db.customUpdate(
+        'UPDATE purchase_orders SET supplier_id = NULL WHERE supplier_id = ?',
+        variables: [Variable.withString(supplierId)],
+        updates: {_db.purchaseOrders},
+      );
+      await _db.customUpdate(
+        'DELETE FROM suppliers WHERE id = ?',
+        variables: [Variable.withString(supplierId)],
+        updates: {_db.suppliers},
+        updateKind: UpdateKind.delete,
+      );
+
+      for (final id in affected) {
+        await _proposeRetail(id);
+      }
+      return affected.length;
+    });
   }
 
   /// Deletes a category. Its products are kept and become uncategorized

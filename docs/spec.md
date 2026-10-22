@@ -145,6 +145,19 @@ adjustable by range, with the ability to override individual products.
   unless the owner chooses "reset to default."
 - When anchors change, the app shows a preview of affected products before applying.
 
+### Margin below the limit: recommended price
+- A product whose retail price sells below its margin limit (judged on the latest PO
+  price or the average, see above) shows a **recommended price** on its detail screen:
+  the waiting suggestion when that already reaches the limit, otherwise the smallest
+  price, rounded up to the rounding step, that does, never lower than the normally
+  calculated price. It works for manual prices too and keeps them manual.
+- Changing to it takes **two clicks**: "Ubah ke Rp X", then the confirmation
+  ("Ya, ubah" or "Batal"). Urgent rows on the Saran harga screen ask for the same
+  confirmation.
+- The detail screen says when the retail price last changed and what it was:
+  "Diubah 12 hari lalu (sebelumnya Rp 10.000)" (kept by the database for every way a
+  price can change; nothing is shown for changes made before this was recorded).
+
 ### Retail price suggestions after a supplier price change
 - A change in a supplier price (from a PO review, from editing the product, or by
   hand) never changes a retail price on its own. The app calculates the "proper"
@@ -160,6 +173,9 @@ adjustable by range, with the ability to override individual products.
 - **Yes (Terapkan):** the suggested price becomes the retail price (still a calculated
   one, so later changes propose again). **No (Tidak):** the retail price stays and the
   suggestion is dropped; it is not offered again until the next supplier price change.
+- A supplier's "current price" is its price with the latest date; two prices with
+  the same date (for example two POs on one day) are told apart by which was recorded
+  last. The supplier price list, the margin and the suggestions all use this.
 - Saving new anchors or markup (already previewed and confirmed) brings every
   calculated price up to date and clears pending suggestions. Bulk adjust saves
   manual prices and clears them too. Deleting and restoring a product is a plain undo
@@ -212,3 +228,13 @@ As an employee, I want to find a product's price in seconds while serving a cust
 
 ## Out of scope (MVP)
 - Inventory/stock counts, sales/POS, supplier ordering.
+
+---
+
+## Managing suppliers
+- "Kelola supplier" (side menu and Settings, like "Kelola kategori") lists every
+  supplier with the number of products it has prices for, and can delete one.
+- Deleting a supplier removes its price records (price history from that supplier) and
+  the product names it used (aliases). Products and past POs are kept (POs lose their
+  supplier). If the supplier drove a product's retail price, the new price is proposed
+  for confirmation like any other supplier price change, never applied silently.

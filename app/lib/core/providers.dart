@@ -212,6 +212,46 @@ final categoryCountsProvider = StreamProvider<CategoryCounts>((ref) async* {
   }
 });
 
+class SupplierCount {
+  const SupplierCount(this.id, this.name, this.count);
+  final String id;
+  final String name;
+
+  /// Products (not deleted) that have a price from this supplier.
+  final int count;
+}
+
+/// Every supplier with the number of products it has prices for, for
+/// "Kelola supplier".
+final supplierCountsProvider = StreamProvider<List<SupplierCount>>((ref) async* {
+  final db = ref.watch(ownerDbProvider);
+
+  Future<List<SupplierCount>> load() async => [
+    for (final r in await db
+        .customSelect(
+          'SELECT s.id AS id, s.name AS name, ('
+          ' SELECT COUNT(DISTINCT sp.product_id) FROM supplier_prices sp'
+          ' JOIN products p ON p.id = sp.product_id'
+          ' WHERE sp.supplier_id = s.id AND p.deleted_at IS NULL) AS n '
+          'FROM suppliers s ORDER BY s.name COLLATE NOCASE',
+        )
+        .get())
+      SupplierCount(
+        r.read<String>('id'),
+        r.read<String>('name'),
+        r.read<int>('n'),
+      ),
+  ];
+
+  yield await load();
+  final changes = db.tableUpdates(
+    TableUpdateQuery.onAllTables([db.suppliers, db.supplierPrices, db.products]),
+  );
+  await for (final _ in changes) {
+    yield await load();
+  }
+});
+
 /// Retail price suggestions waiting for the owner (most urgent first),
 /// recomputed whenever products, prices, limits or settings change.
 final priceSuggestionsProvider = StreamProvider<List<PriceSuggestion>>((
