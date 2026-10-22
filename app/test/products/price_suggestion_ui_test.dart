@@ -152,12 +152,12 @@ void main() {
   group('product detail', () {
     testWidgets('shows the suggestion, higher, and nothing changes until yes', (tester) async {
       await pump(tester, location: '/', seed: () {});
-      final id = await add(tester, 'Kabel', newPrice: 45000);
+      final id = await add(tester, 'Kabel', newPrice: 10200);
       await show(tester, '/produk/$id');
 
       expect(find.text('Harga supplier berubah'), findsOneWidget);
       expect(
-        find.text('Harga jual disarankan Rp 70.000 (naik Rp 55.000 dari Rp 15.000).'),
+        find.text('Harga jual disarankan Rp 20.000 (naik Rp 5.000 dari Rp 15.000).'),
         findsOneWidget,
       );
       expect(find.textContaining('Margin dengan harga ini'), findsOneWidget);
@@ -180,22 +180,22 @@ void main() {
 
     testWidgets('Terapkan changes the price and the banner goes away', (tester) async {
       await pump(tester, location: '/', seed: () {});
-      final id = await add(tester, 'Kabel', newPrice: 45000);
+      final id = await add(tester, 'Kabel', newPrice: 10200);
       await show(tester, '/produk/$id');
 
       await tester.tap(find.text('Terapkan'));
       await settle(tester);
       await frames(tester);
 
-      expect(await retailOf(tester, id), 70000);
+      expect(await retailOf(tester, id), 20000);
       expect(find.text('Harga supplier berubah'), findsNothing);
-      expect(find.text('Harga jual diubah menjadi Rp 70.000'), findsOneWidget);
-      expect(find.text('Rp 70.000'), findsWidgets);
+      expect(find.text('Harga jual diubah menjadi Rp 20.000'), findsOneWidget);
+      expect(find.text('Rp 20.000'), findsWidgets);
     });
 
     testWidgets('Tidak keeps the price, and it is not asked again on reopening', (tester) async {
       await pump(tester, location: '/', seed: () {});
-      final id = await add(tester, 'Kabel', newPrice: 45000);
+      final id = await add(tester, 'Kabel', newPrice: 10200);
       await show(tester, '/produk/$id');
 
       await tester.tap(find.text('Tidak'));
@@ -214,7 +214,7 @@ void main() {
       await tester.runAsync(() async {
         final sup = (await db.customSelect('SELECT id FROM suppliers').getSingle())
             .read<String>('id');
-        await service.recordSupplierPrice(id, sup, 12000);
+        await service.recordSupplierPrice(id, sup, 10300);
       });
       await show(tester, '/produk/$id');
       expect(
@@ -230,11 +230,81 @@ void main() {
       expect(find.text('Harga supplier berubah'), findsNothing);
     });
 
-    testWidgets('says when the current price now sells below the margin limit', (tester) async {
+    testWidgets('below the margin limit: a recommended price instead of the plain suggestion', (
+      tester,
+    ) async {
+      await pump(tester, location: '/', seed: () {});
+      final id = await add(tester, 'Kabel', newPrice: 12000); // 15.000 is now 20%
+      await show(tester, '/produk/$id');
+
+      expect(find.text('Margin di bawah batas'), findsWidgets);
+      expect(
+        find.text('Margin 20%, batasnya 30%. Disarankan Rp 20.000 (margin 40%).'),
+        findsOneWidget,
+      );
+      expect(find.text('Ubah ke Rp 20.000'), findsOneWidget);
+      expect(find.text('Harga supplier berubah'), findsNothing); // taken over
+      expect(await retailOf(tester, id), 15000);
+    });
+
+    testWidgets('changing to the recommended price takes two clicks', (tester) async {
       await pump(tester, location: '/', seed: () {});
       final id = await add(tester, 'Kabel', newPrice: 12000);
       await show(tester, '/produk/$id');
-      expect(find.text('Dengan harga sekarang, margin di bawah batas.'), findsOneWidget);
+
+      // First click: only asks.
+      await tester.tap(find.text('Ubah ke Rp 20.000'));
+      await tester.pump();
+      expect(find.text('Ubah harga jual dari Rp 15.000 ke Rp 20.000?'), findsOneWidget);
+      expect(find.text('Ya, ubah'), findsOneWidget);
+      expect(find.text('Batal'), findsOneWidget);
+      expect(await retailOf(tester, id), 15000); // nothing changed yet
+
+      // Batal goes back to the first step.
+      await tester.tap(find.text('Batal'));
+      await tester.pump();
+      expect(find.text('Ubah ke Rp 20.000'), findsOneWidget);
+      expect(await retailOf(tester, id), 15000);
+
+      // Second click: confirms.
+      await tester.tap(find.text('Ubah ke Rp 20.000'));
+      await tester.pump();
+      await tester.tap(find.text('Ya, ubah'));
+      await settle(tester);
+      await frames(tester);
+
+      expect(await retailOf(tester, id), 20000);
+      expect(find.text('Harga jual diubah menjadi Rp 20.000'), findsOneWidget);
+      expect(find.text('Ubah ke Rp 20.000'), findsNothing); // no longer below the limit
+    });
+
+    testWidgets('a manual price below the limit gets a recommendation too, and stays manual', (
+      tester,
+    ) async {
+      await pump(tester, location: '/', seed: () {});
+      final id = await add(tester, 'Kabel', retail: 11000); // 13,6% at 9.500
+      await show(tester, '/produk/$id');
+
+      expect(find.text('Ubah ke Rp 15.000'), findsOneWidget);
+      await tester.tap(find.text('Ubah ke Rp 15.000'));
+      await tester.pump();
+      await tester.tap(find.text('Ya, ubah'));
+      await settle(tester);
+      await frames(tester);
+
+      expect(await retailOf(tester, id), 15000);
+      final manual = (await tester.runAsync(
+        () => db.customSelect('SELECT retail_is_override AS o FROM products').getSingle(),
+      ))!
+          .read<int>('o');
+      expect(manual, 1);
+    });
+
+    testWidgets('a price within the margin limit has no recommendation', (tester) async {
+      await pump(tester, location: '/', seed: () {});
+      final id = await add(tester, 'Kabel');
+      await show(tester, '/produk/$id');
+      expect(find.textContaining('Ubah ke Rp'), findsNothing);
     });
 
     testWidgets('no banner when nothing changed', (tester) async {
@@ -321,7 +391,13 @@ void main() {
       final zeta = await add(tester, 'Zeta', newPrice: 12000);
       await show(tester, '/saran-harga');
 
+      // Zeta sells below the margin limit now: Terapkan asks once more.
       await tester.tap(find.byTooltip('Terapkan: Zeta'));
+      await frames(tester);
+      expect(find.text('Ubah harga jual?'), findsOneWidget);
+      expect(find.textContaining('Zeta: dari Rp 15.000 ke Rp 20.000'), findsOneWidget);
+      expect(await retailOf(tester, zeta), 15000); // not changed by the first click
+      await tester.tap(find.text('Ya, ubah'));
       await settle(tester);
       await frames(tester);
       expect(await retailOf(tester, zeta), 20000);
@@ -336,6 +412,21 @@ void main() {
       await finish(tester);
     });
 
+
+    testWidgets('an urgent row can be cancelled at the confirmation', (tester) async {
+      await pump(tester, location: '/', seed: () {});
+      final zeta = await add(tester, 'Zeta', newPrice: 12000);
+      await show(tester, '/saran-harga');
+
+      await tester.tap(find.byTooltip('Terapkan: Zeta'));
+      await frames(tester);
+      await tester.tap(find.text('Batal'));
+      await frames(tester);
+
+      expect(await retailOf(tester, zeta), 15000);
+      expect(find.text('Zeta'), findsOneWidget); // still waiting
+      await finish(tester);
+    });
     testWidgets('tapping a row opens the product', (tester) async {
       await pump(tester, location: '/', seed: () {});
       final id = await add(tester, 'Zeta', newPrice: 12000);

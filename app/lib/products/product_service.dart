@@ -77,6 +77,33 @@ class PriceSuggestion {
   int get change => suggestedRetail - currentRetail;
 }
 
+/// What to do about a product whose retail price now sells below its margin
+/// limit: a price that reaches the limit.
+class PriceRecommendation {
+  const PriceRecommendation({
+    required this.productId,
+    required this.currentRetail,
+    required this.recommendedRetail,
+    required this.marginSupply,
+    required this.minMarginPct,
+  });
+
+  final String productId;
+  final int currentRetail;
+  final int recommendedRetail;
+
+  /// The supply price the margin is judged against (settings.margin_basis).
+  final int marginSupply;
+
+  /// The limit that applies to [marginSupply].
+  final double minMarginPct;
+
+  /// Margin at the current price (below [minMarginPct]) and at the recommended
+  /// price (at or above it), in percent.
+  double get currentMargin => marginPct(marginSupply, currentRetail)!;
+  double get recommendedMargin => marginPct(marginSupply, recommendedRetail)!;
+}
+
 class ProductDetail {
   const ProductDetail({
     required this.product,
@@ -88,6 +115,7 @@ class ProductDetail {
     required this.marginAvgCount,
     required this.minMarginPct,
     required this.currentPrices,
+    this.recommendation,
   });
 
   final Product product;
@@ -110,6 +138,9 @@ class ProductDetail {
   /// Margin limit for [marginSupply], or null if none applies.
   final double? minMarginPct;
   final List<SupplierPriceEntry> currentPrices;
+
+  /// Set when the current retail price sells below the margin limit.
+  final PriceRecommendation? recommendation;
 }
 
 /// Immutable snapshot of the pricing rule's inputs. [calc] is synchronous, so
@@ -367,6 +398,68 @@ class ProductService {
     });
   }
 
+  /// A recommended retail price for a product that sells below its margin
+  /// limit, or null when it does not (or has no price or no limit to compare).
+  ///
+  /// It is the waiting suggestion when that already reaches the limit,
+  /// otherwise the smallest rounded price that does, never below the normal
+  /// calculated price. Works for manual prices too.
+  Future<PriceRecommendation?> recommendation(String productId) async {
+    final product =
+        await (_db.select(_db.products)..where(
+              (p) => p.id.equals(productId) & p.deletedAt.isNull(),
+            ))
+            .getSingleOrNull();
+    final retail = product?.retailPrice;
+    if (product == null || retail == null) return null;
+
+    final supply = (await marginSupplyPrices(productId: productId))[productId];
+    if (supply == null) return null;
+    final limit = minMarginFor(supply, await marginThresholds());
+    if (limit == null || (marginPct(supply, retail) ?? 100) >= limit) {
+      return null;
+    }
+
+    final pending = product.pendingRetail;
+    final int price;
+    if (pending != null &&
+        product.retailIsOverride == 0 &&
+        (marginPct(supply, pending) ?? 0) >= limit) {
+      price = pending;
+    } else {
+      final config = await pricingConfig();
+      price = recommendedRetail(
+        supply: supply,
+        minMarginPct: limit,
+        calculated: config.calc(supply),
+        roundTo: config.roundTo,
+      );
+    }
+    return PriceRecommendation(
+      productId: productId,
+      currentRetail: retail,
+      recommendedRetail: price,
+      marginSupply: supply,
+      minMarginPct: limit,
+    );
+  }
+
+  /// The owner confirmed the recommended price. The product keeps its kind: a
+  /// manual price stays manual, a calculated one stays calculated. Any waiting
+  /// suggestion is cleared, since the price was just decided. Does nothing if
+  /// the product no longer sells below its limit.
+  Future<void> applyRecommendation(String productId) async {
+    final r = await recommendation(productId);
+    if (r == null) return;
+    await (_db.update(_db.products)..where((p) => p.id.equals(productId)))
+        .write(
+          ProductsCompanion(
+            retailPrice: Value(r.recommendedRetail),
+            pendingRetail: const Value(null),
+          ),
+        );
+  }
+
   /// The owner said yes: the suggested price becomes the retail price (still
   /// a calculated one, so later price changes propose again). Does nothing if
   /// there is nothing pending.
@@ -438,6 +531,7 @@ class ProductService {
       marginSupply: marginSupply,
       marginBasis: settings.marginBasis,
       marginAvgCount: settings.marginAvgCount,
+      recommendation: await recommendation(productId),
       minMarginPct: marginSupply == null
           ? null
           : minMarginFor(marginSupply, await marginThresholds()),

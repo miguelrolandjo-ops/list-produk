@@ -5,6 +5,8 @@ import 'package:intl/intl.dart';
 
 import '../core/providers.dart';
 import '../core/rupiah.dart';
+import '../core/time_ago.dart';
+import '../data/owner_database.dart' show Product;
 import '../core/thousands_formatter.dart';
 import '../pricing/margin.dart';
 import 'product_service.dart';
@@ -20,6 +22,17 @@ const _basisLabel = {
   'lowest': 'terendah',
   'latest': 'terbaru',
 };
+
+/// "Diubah 12 hari lalu (sebelumnya Rp 10.000)", or null if no change of the
+/// retail price has been recorded (older data, or never changed).
+String? _changeText(Product p) {
+  final raw = p.retailChangedAt;
+  final at = raw == null ? null : DateTime.tryParse(raw)?.toLocal();
+  if (at == null) return null;
+  final before = p.retailPrev;
+  return 'Diubah ${timeAgo(at, DateTime.now())}'
+      '${before == null ? '' : ' (sebelumnya ${formatRupiah(before)})'}';
+}
 
 String _marginBasisLabel(ProductDetail d) => d.marginBasis == 'average'
     ? 'rata-rata ${d.marginAvgCount} PO terakhir'
@@ -89,6 +102,25 @@ class ProductDetailScreen extends ConsumerWidget {
             price == null
                 ? 'Saran harga sudah tidak berlaku'
                 : 'Harga jual diubah menjadi ${formatRupiah(price)}',
+          ),
+        ),
+      );
+  }
+
+  Future<void> _applyRecommendation(
+    BuildContext context,
+    WidgetRef ref,
+    PriceRecommendation r,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    await ref.read(productServiceProvider).applyRecommendation(productId);
+    ref.invalidate(productDetailProvider(productId));
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            'Harga jual diubah menjadi ${formatRupiah(r.recommendedRetail)}',
           ),
         ),
       );
@@ -188,6 +220,8 @@ class ProductDetailScreen extends ConsumerWidget {
             onHistory: () => _showHistory(context, ref),
             onEdit: () => _editPrice(context, ref, d),
             onMargin: () => context.push('/pengaturan/harga'),
+            onApplyRecommendation: () =>
+                _applyRecommendation(context, ref, d.recommendation!),
             onApplySuggestion: () => _applySuggestion(context, ref, d),
             onDismissSuggestion: () => _dismissSuggestion(context, ref),
           );
@@ -265,6 +299,7 @@ class _Body extends StatelessWidget {
     required this.onMargin,
     required this.onApplySuggestion,
     required this.onDismissSuggestion,
+    required this.onApplyRecommendation,
   });
 
   final ProductDetail detail;
@@ -277,6 +312,9 @@ class _Body extends StatelessWidget {
   /// Yes / no to the suggested retail price (shown only when there is one).
   final VoidCallback onApplySuggestion;
   final VoidCallback onDismissSuggestion;
+
+  /// Confirmed (second click) recommended price for a below-margin product.
+  final VoidCallback onApplyRecommendation;
 
   @override
   Widget build(BuildContext context) {
@@ -305,7 +343,15 @@ class _Body extends StatelessWidget {
               const SizedBox(height: 4),
               Text(subtitle, style: theme.textTheme.bodyMedium),
               const SizedBox(height: 16),
-              if (p.pendingRetail != null &&
+              // Below the margin limit: a recommended price, applied in two clicks.
+              // It takes over from the plain suggestion (it is the suggestion
+              // itself when that already reaches the limit).
+              if (detail.recommendation case final r?)
+                _RecommendationCard(
+                  recommendation: r,
+                  onConfirmed: onApplyRecommendation,
+                )
+              else if (p.pendingRetail != null &&
                   p.retailIsOverride == 0 &&
                   retail != null)
                 _SuggestionCard(
@@ -395,13 +441,15 @@ class _Body extends StatelessWidget {
                             ),
                           ),
                         const SizedBox(height: 4),
-                        Text(
-                          p.retailIsOverride == 1
-                              ? 'Diubah manual, tidak dihitung ulang otomatis'
-                              : 'Otomatis dari harga supplier '
-                                    '${_basisLabel[detail.basis] ?? ''}',
-                          style: theme.textTheme.bodySmall,
-                        ),
+                        if (p.retailIsOverride == 0)
+                          Text(
+                            'Otomatis dari harga supplier '
+                            '${_basisLabel[detail.basis] ?? ''}',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        // When the price last changed and what it was before.
+                        if (_changeText(p) case final text?)
+                          Text(text, style: theme.textTheme.bodySmall),
                       ],
                     ),
                   ),
@@ -532,6 +580,94 @@ class _SuggestionCard extends StatelessWidget {
                 FilledButton(onPressed: onApply, child: const Text('Terapkan')),
               ],
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// "Margin di bawah batas": a recommended price that reaches the limit. Changing
+/// the price takes two clicks, "Ubah ke Rp X" and then the confirmation.
+class _RecommendationCard extends StatefulWidget {
+  const _RecommendationCard({
+    required this.recommendation,
+    required this.onConfirmed,
+  });
+
+  final PriceRecommendation recommendation;
+  final VoidCallback onConfirmed;
+
+  @override
+  State<_RecommendationCard> createState() => _RecommendationCardState();
+}
+
+class _RecommendationCardState extends State<_RecommendationCard> {
+  bool _confirming = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final r = widget.recommendation;
+    final onColor = scheme.onErrorContainer;
+    return Card(
+      color: scheme.errorContainer,
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.warning_amber_rounded, color: onColor),
+                const SizedBox(width: 8),
+                Text(
+                  'Margin di bawah batas',
+                  style: theme.textTheme.titleSmall?.copyWith(color: onColor),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Margin ${_pct.format(r.currentMargin)}%, batasnya '
+              '${_pct.format(r.minMarginPct)}%. Disarankan '
+              '${formatRupiah(r.recommendedRetail)} '
+              '(margin ${_pct.format(r.recommendedMargin)}%).',
+              style: TextStyle(color: onColor),
+            ),
+            const SizedBox(height: 8),
+            if (!_confirming)
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton(
+                  onPressed: () => setState(() => _confirming = true),
+                  child: Text('Ubah ke ${formatRupiah(r.recommendedRetail)}'),
+                ),
+              )
+            else ...[
+              Text(
+                'Ubah harga jual dari ${formatRupiah(r.currentRetail)} '
+                'ke ${formatRupiah(r.recommendedRetail)}?',
+                style: TextStyle(color: onColor, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => setState(() => _confirming = false),
+                    child: const Text('Batal'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: widget.onConfirmed,
+                    child: const Text('Ya, ubah'),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),

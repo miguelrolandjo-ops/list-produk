@@ -15,7 +15,11 @@ void main() {
 
   /// Opens the detail screen of a product with supply price 9.500.
   /// [retail] is a manual retail price (null = calculated, 15.000).
-  Future<void> openDetail(WidgetTester tester, {int? retail}) async {
+  Future<void> openDetail(
+    WidgetTester tester, {
+    int? retail,
+    Future<void> Function(OwnerDatabase db, String id)? prepare,
+  }) async {
     tester.view.physicalSize = const Size(800, 2400);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -35,6 +39,7 @@ void main() {
           retailPrice: retail,
         ),
       );
+      await prepare?.call(db, id);
     });
 
     final router = GoRouter(
@@ -116,7 +121,7 @@ void main() {
     expect(label.style?.color, scheme().onErrorContainer);
     expect(label.data, startsWith('Margin -'));
     // The existing "below the limit" warning is still there.
-    expect(find.textContaining('Margin di bawah batas'), findsOneWidget);
+    expect(find.textContaining('Margin di bawah batas'), findsWidgets);
   });
 
   testWidgets('add product: a loss margin preview is red', (tester) async {
@@ -148,5 +153,55 @@ void main() {
     await tester.enterText(find.widgetWithText(TextFormField, 'Harga jual'), '5000');
     await tester.pump();
     expect(marginColor(), scheme().error);
+  });
+
+  testWidgets('a manual price says when it changed and what it was, not "tidak dihitung"', (
+    tester,
+  ) async {
+    // 12 days ago it went from 10.000 to the current price.
+    await openDetail(
+      tester,
+      retail: 20000,
+      prepare: (db, id) async {
+        final then = DateTime.now().toUtc().subtract(const Duration(days: 12));
+        await db.customStatement(
+          'UPDATE products SET retail_prev = 10000, retail_changed_at = ? WHERE id = ?',
+          [then.toIso8601String(), id],
+        );
+      },
+    );
+    expect(find.text('Diubah 12 hari lalu (sebelumnya Rp 10.000)'), findsOneWidget);
+    expect(find.textContaining('tidak dihitung ulang'), findsNothing);
+    expect(find.textContaining('Diubah manual'), findsNothing);
+  });
+
+  testWidgets('a price just changed by the owner says "hari ini" with the old price', (
+    tester,
+  ) async {
+    // Created at 15.000, then set to 20.000 by hand: the trigger recorded it.
+    await openDetail(tester, retail: 20000);
+    expect(find.text('Diubah hari ini (sebelumnya Rp 15.000)'), findsOneWidget);
+  });
+
+  testWidgets('a calculated price shows its basis, and the change when there was one', (
+    tester,
+  ) async {
+    await openDetail(
+      tester,
+      prepare: (db, id) async {
+        await db.customStatement(
+          "UPDATE products SET retail_prev = 10000, retail_changed_at = ? WHERE id = ?",
+          [DateTime.now().toUtc().subtract(const Duration(days: 2)).toIso8601String(), id],
+        );
+      },
+    );
+    expect(find.textContaining('Otomatis dari harga supplier'), findsOneWidget);
+    expect(find.text('Diubah 2 hari lalu (sebelumnya Rp 10.000)'), findsOneWidget);
+  });
+
+  testWidgets('nothing recorded: no change line at all', (tester) async {
+    await openDetail(tester); // calculated at its first price: never changed
+    expect(find.textContaining('Diubah '), findsNothing);
+    expect(find.textContaining('sebelumnya'), findsNothing);
   });
 }

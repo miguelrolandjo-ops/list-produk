@@ -25,3 +25,24 @@ bool isBelowMargin(int supply, int? retail, Iterable<MarginRange> ranges) {
   final margin = marginPct(supply, retail);
   return limit != null && margin != null && margin < limit;
 }
+
+/// The retail price to recommend when [supply] sells below its margin limit:
+/// the smallest price, rounded up to [roundTo], whose margin reaches
+/// [minMarginPct], but never lower than the normal [calculated] price.
+int recommendedRetail({
+  required int supply,
+  required double minMarginPct,
+  required int calculated,
+  required int roundTo,
+}) {
+  // margin = (retail - supply) / retail >= limit  <=>  retail >= supply / (1 - limit).
+  // The tiny tolerance keeps a price that meets the limit exactly (7.000 at 30%
+  // is exactly 10.000) from being pushed up a step by floating point noise.
+  const epsilon = 1e-9;
+  var price = (supply * 100 / (100 - minMarginPct) - epsilon).ceil();
+  price = ((price + roundTo - 1) ~/ roundTo) * roundTo;
+  while ((marginPct(supply, price) ?? 0) < minMarginPct - epsilon) {
+    price += roundTo;
+  }
+  return price > calculated ? price : calculated;
+}

@@ -18,6 +18,30 @@ class PriceSuggestionsScreen extends ConsumerWidget {
     PriceSuggestion s,
   ) async {
     final messenger = ScaffoldMessenger.of(context);
+    // Below the margin limit: two clicks. The second is this confirmation.
+    if (s.belowMargin) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Ubah harga jual?'),
+          content: Text(
+            '${s.name}: dari ${formatRupiah(s.currentRetail)} '
+            'ke ${formatRupiah(s.suggestedRetail)}.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Batal'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Ya, ubah'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
     await ref.read(productServiceProvider).applySuggestion(s.productId);
     messenger
       ..hideCurrentSnackBar()
