@@ -461,7 +461,12 @@ class ProductService {
     final rows =
         await (_db.select(_db.supplierPrices)
               ..where((p) => p.productId.equals(productId))
-              ..orderBy([(p) => OrderingTerm.desc(p.observedAt)]))
+              ..orderBy([
+                (p) => OrderingTerm.desc(p.observedAt),
+                // Same date (for example two POs on one day): the one recorded
+                // last comes first.
+                (p) => OrderingTerm.desc(const CustomExpression<int>('rowid')),
+              ]))
             .get();
     return [
       for (final r in rows)

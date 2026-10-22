@@ -238,5 +238,57 @@ void main() {
       expect(p['retail_price'], 15000);
       expect(p['pending_retail'], isNull);
     });
+
+    test('version 3 gets retail change tracking and the fixed "current price" view', () async {
+      // A phone that already holds two prices with the same date: the old view
+      // kept showing the older one.
+      final db = oldDatabase((raw) {
+        raw.execute('''
+          CREATE TABLE products (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, retail_price INTEGER,
+            retail_is_override INTEGER NOT NULL DEFAULT 0, pending_retail INTEGER,
+            updated_at TEXT NOT NULL DEFAULT '2026-01-01T00:00:00.000Z'
+          )''');
+        raw.execute('''
+          CREATE TABLE supplier_prices (
+            id TEXT PRIMARY KEY, product_id TEXT NOT NULL, supplier_id TEXT NOT NULL,
+            unit_price INTEGER NOT NULL, po_line_id TEXT, observed_at TEXT NOT NULL
+          )''');
+        raw.execute('''
+          CREATE VIEW current_supplier_prices AS
+          SELECT product_id, supplier_id, unit_price, observed_at FROM (
+            SELECT product_id, supplier_id, unit_price, observed_at,
+                   ROW_NUMBER() OVER (PARTITION BY product_id, supplier_id
+                                      ORDER BY observed_at DESC) AS rn
+            FROM supplier_prices
+          ) WHERE rn = 1''');
+        raw.execute(settingsV1.replaceFirst(
+          'last_backup_at TEXT',
+          "last_backup_at TEXT, margin_basis TEXT NOT NULL DEFAULT 'latest', "
+              'margin_avg_count INTEGER NOT NULL DEFAULT 3',
+        ));
+        raw.execute('INSERT INTO settings (id) VALUES (1)');
+        raw.execute("INSERT INTO products (id, name, retail_price) VALUES ('p1', 'Kabel', 15000)");
+        raw.execute("INSERT INTO supplier_prices VALUES ('a', 'p1', 's1', 9500, NULL, '2026-10-04T00:00:00.000Z')");
+        raw.execute("INSERT INTO supplier_prices VALUES ('b', 'p1', 's1', 45000, NULL, '2026-10-04T00:00:00.000Z')");
+        raw.execute('PRAGMA user_version = 3');
+      });
+      addTearDown(db.close);
+
+      // The tie is now broken in favour of the price recorded last.
+      final current = await db.customSelect('SELECT unit_price FROM current_supplier_prices').getSingle();
+      expect(current.read<int>('unit_price'), 45000);
+
+      // The new columns exist, nothing is recorded for old data...
+      var p = (await db.customSelect('SELECT retail_prev, retail_changed_at FROM products').getSingle()).data;
+      expect(p['retail_prev'], isNull);
+      expect(p['retail_changed_at'], isNull);
+
+      // ...and from now on every retail price change is remembered.
+      await db.customStatement('UPDATE products SET retail_price = 70000');
+      p = (await db.customSelect('SELECT retail_prev, retail_changed_at FROM products').getSingle()).data;
+      expect(p['retail_prev'], 15000);
+      expect(p['retail_changed_at'], isNotNull);
+    });
   });
 }

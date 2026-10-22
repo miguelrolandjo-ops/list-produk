@@ -66,7 +66,12 @@ CREATE TABLE products (
   published_at       TEXT,                      -- last successful publish_catalog()
   -- Retail price the app proposes after a supplier price change, waiting for
   -- the owner's yes/no. NULL = nothing to confirm. Never published.
-  pending_retail     INTEGER CHECK (pending_retail IS NULL OR pending_retail > 0)
+  pending_retail     INTEGER CHECK (pending_retail IS NULL OR pending_retail > 0),
+  -- The last change of retail_price and what it was before, for "Diubah 12 hari
+  -- lalu (sebelumnya Rp 10.000)". Kept by the products_retail_changed trigger, so
+  -- every way of changing the price is covered. NULL = no change recorded yet.
+  retail_prev        INTEGER,
+  retail_changed_at  TEXT
 );
 CREATE INDEX products_name ON products (name);
 
@@ -126,12 +131,13 @@ CREATE TABLE po_lines (
                      CHECK (match_status IN ('auto', 'suggested', 'confirmed', 'new', 'ignored'))
 );
 
--- Latest price per product per supplier
+-- Latest price per product per supplier. Two prices with the same date (for
+-- example two POs on one day) are told apart by which was recorded last.
 CREATE VIEW current_supplier_prices AS
 SELECT product_id, supplier_id, unit_price, observed_at FROM (
   SELECT product_id, supplier_id, unit_price, observed_at,
          ROW_NUMBER() OVER (PARTITION BY product_id, supplier_id
-                            ORDER BY observed_at DESC) AS rn
+                            ORDER BY observed_at DESC, rowid DESC) AS rn
   FROM supplier_prices
 ) WHERE rn = 1;
 
@@ -150,6 +156,17 @@ AFTER UPDATE OF name, model, category_id, unit, photo_remote_path, retail_price,
 ON products
 BEGIN
   UPDATE products SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id;
+END;
+
+-- Remember the last retail price change and the price before it
+CREATE TRIGGER products_retail_changed
+AFTER UPDATE OF retail_price ON products
+WHEN OLD.retail_price IS NOT NULL AND NEW.retail_price IS NOT OLD.retail_price
+BEGIN
+  UPDATE products
+     SET retail_prev = OLD.retail_price,
+         retail_changed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+   WHERE id = NEW.id;
 END;
 
 -- Renaming a category changes what employees see on its products

@@ -120,6 +120,9 @@ void main() {
     raw.execute('ALTER TABLE settings DROP COLUMN margin_basis');
     raw.execute('ALTER TABLE settings DROP COLUMN margin_avg_count');
     raw.execute('ALTER TABLE products DROP COLUMN pending_retail');
+    raw.execute('DROP TRIGGER products_retail_changed');
+    raw.execute('ALTER TABLE products DROP COLUMN retail_prev');
+    raw.execute('ALTER TABLE products DROP COLUMN retail_changed_at');
     raw.execute("UPDATE settings SET basis = 'lowest'");
     raw.execute('PRAGMA user_version = 1');
     raw.close();

@@ -1,5 +1,11 @@
 import 'package:drift/native.dart';
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_application_1/data/owner_database.dart';
+import 'package:flutter_application_1/inbox/po_import_service.dart';
+import 'package:flutter_application_1/review/review_draft_loader.dart';
+import 'package:flutter_application_1/review/review_service.dart';
 import 'package:flutter_application_1/pricing/bulk_adjust_service.dart';
 import 'package:flutter_application_1/pricing/defaults.dart';
 import 'package:flutter_application_1/pricing/pricing_settings_service.dart';
@@ -249,6 +255,110 @@ void main() {
         for (final a in defaultAnchors) (a.$1, a.$2 + 5000),
       ], 30);
       expect((await product(id)).retailPrice, 20000);
+    });
+  });
+
+  group('two prices with the same date (for example two POs on one day)', () {
+    final day = DateTime.utc(2026, 10, 4);
+
+    /// A product whose first price is dated [day], then a new PO price, also
+    /// dated [day], recorded afterwards.
+    Future<String> sameDay(int first, int second) async {
+      final id = await add(supply: first);
+      await db.customStatement(
+        'UPDATE supplier_prices SET observed_at = ?',
+        [day.toIso8601String()],
+      );
+      await service.recordSupplierPrice(
+        id,
+        await supplier('CV Maju'),
+        second,
+        observedAt: day,
+      );
+      return id;
+    }
+
+    test('the supplier price list shows the one recorded last', () async {
+      final id = await sameDay(9500, 45000);
+      final d = (await service.detail(id))!;
+      expect(d.currentPrices.single.unitPrice, 45000);
+    });
+
+    test('the margin, the supplier list and the suggestion all agree', () async {
+      final id = await sameDay(9500, 45000);
+      final d = (await service.detail(id))!;
+      expect(d.marginSupply, 45000);
+      expect(d.currentPrices.single.unitPrice, d.marginSupply);
+      // And the new price is offered as a retail suggestion (Saran harga).
+      expect((await product(id)).pendingRetail, 70000);
+      expect((await service.pendingSuggestions()).single.productId, id);
+    });
+
+    test('the history lists the one recorded last first', () async {
+      final id = await sameDay(9500, 45000);
+      expect((await service.priceHistory(id)).map((e) => e.unitPrice), [45000, 9500]);
+    });
+
+    test('a later PO on that day wins over an earlier one, however many there are', () async {
+      final id = await sameDay(9500, 45000);
+      await service.recordSupplierPrice(id, await supplier('CV Maju'), 12000, observedAt: day);
+      expect((await service.detail(id))!.currentPrices.single.unitPrice, 12000);
+      expect((await service.priceHistory(id)).first.unitPrice, 12000);
+    });
+
+    test('a price dated earlier than the current one still does not replace it', () async {
+      final id = await add(supply: 9500); // dated "now"
+      await service.recordSupplierPrice(
+        id,
+        await supplier('CV Maju'),
+        45000,
+        observedAt: DateTime.utc(2020, 1, 1),
+      );
+      expect((await service.detail(id))!.currentPrices.single.unitPrice, 9500);
+    });
+
+    test('importing and reviewing the same-dated PO twice updates everything', () async {
+      // Exactly the flow that went wrong: the sample PO (dated 2026-10-04) is
+      // reviewed once, then a new import of it comes in with a different price.
+      final sample = jsonDecode(
+        File('../shared/extraction_sample.json').readAsStringSync(),
+      ) as Map<String, Object?>;
+      final review = ReviewService(db, service);
+
+      Future<void> importAndSave(String poId, int? price) async {
+        final json = jsonDecode(jsonEncode(sample)) as Map<String, Object?>;
+        final lines = json['lines']! as List;
+        final cable = lines.firstWhere((l) => (l as Map)['name'] == 'Kabel Micro USB 1M') as Map;
+        if (price != null) cable['unit_price'] = price;
+        await db.customStatement(
+          "INSERT INTO purchase_orders (id, status, source) VALUES (?, 'processing', 'gallery')",
+          [poId],
+        );
+        await PoImportService(db).importResult(poId, jsonEncode(json));
+        var d = await ReviewDraftLoader(db).load(poId);
+        // Keep only the cable line.
+        final i = d.lines.indexWhere((l) => l.rawName == 'Kabel Micro USB 1M');
+        d = d.accept(i);
+        for (var k = 0; k < d.lines.length; k++) {
+          if (k != i) d = d.toggleIgnore(k);
+        }
+        await review.save(d.toReviewedPo());
+      }
+
+      await importAndSave('po1', null); // creates the product at 7.000
+      final id = (await db
+              .customSelect("SELECT id FROM products WHERE name = 'Kabel Micro USB 1M'")
+              .getSingle())
+          .read<String>('id');
+      expect((await product(id)).retailPrice, isNotNull);
+
+      await importAndSave('po2', 12000); // the same date, a higher price
+
+      final d = (await service.detail(id))!;
+      expect(d.currentPrices.single.unitPrice, 12000); // the supplier list changed
+      expect(d.marginSupply, 12000); // the margin saw it too
+      expect((await product(id)).pendingRetail, isNotNull); // and Saran harga appears
+      expect((await service.priceHistory(id)).map((e) => e.unitPrice), [12000, 7000]);
     });
   });
 }

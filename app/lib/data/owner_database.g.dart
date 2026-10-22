@@ -1817,6 +1817,28 @@ class Products extends Table with TableInfo<Products, Product> {
     requiredDuringInsert: false,
     $customConstraints: 'CHECK (pending_retail IS NULL OR pending_retail > 0)',
   );
+  static const VerificationMeta _retailPrevMeta = const VerificationMeta(
+    'retailPrev',
+  );
+  late final GeneratedColumn<int> retailPrev = GeneratedColumn<int>(
+    'retail_prev',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    $customConstraints: '',
+  );
+  static const VerificationMeta _retailChangedAtMeta = const VerificationMeta(
+    'retailChangedAt',
+  );
+  late final GeneratedColumn<String> retailChangedAt = GeneratedColumn<String>(
+    'retail_changed_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    $customConstraints: '',
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1833,6 +1855,8 @@ class Products extends Table with TableInfo<Products, Product> {
     deletedAt,
     publishedAt,
     pendingRetail,
+    retailPrev,
+    retailChangedAt,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1947,6 +1971,21 @@ class Products extends Table with TableInfo<Products, Product> {
         ),
       );
     }
+    if (data.containsKey('retail_prev')) {
+      context.handle(
+        _retailPrevMeta,
+        retailPrev.isAcceptableOrUnknown(data['retail_prev']!, _retailPrevMeta),
+      );
+    }
+    if (data.containsKey('retail_changed_at')) {
+      context.handle(
+        _retailChangedAtMeta,
+        retailChangedAt.isAcceptableOrUnknown(
+          data['retail_changed_at']!,
+          _retailChangedAtMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -2012,6 +2051,14 @@ class Products extends Table with TableInfo<Products, Product> {
         DriftSqlType.int,
         data['${effectivePrefix}pending_retail'],
       ),
+      retailPrev: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}retail_prev'],
+      ),
+      retailChangedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}retail_changed_at'],
+      ),
     );
   }
 
@@ -2049,6 +2096,12 @@ class Product extends DataClass implements Insertable<Product> {
   /// Retail price the app proposes after a supplier price change, waiting for
   /// the owner's yes/no. NULL = nothing to confirm. Never published.
   final int? pendingRetail;
+
+  /// The last change of retail_price and what it was before, for "Diubah 12 hari
+  /// lalu (sebelumnya Rp 10.000)". Kept by the products_retail_changed trigger, so
+  /// every way of changing the price is covered. NULL = no change recorded yet.
+  final int? retailPrev;
+  final String? retailChangedAt;
   const Product({
     this.id,
     required this.name,
@@ -2064,6 +2117,8 @@ class Product extends DataClass implements Insertable<Product> {
     this.deletedAt,
     this.publishedAt,
     this.pendingRetail,
+    this.retailPrev,
+    this.retailChangedAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -2100,6 +2155,12 @@ class Product extends DataClass implements Insertable<Product> {
     if (!nullToAbsent || pendingRetail != null) {
       map['pending_retail'] = Variable<int>(pendingRetail);
     }
+    if (!nullToAbsent || retailPrev != null) {
+      map['retail_prev'] = Variable<int>(retailPrev);
+    }
+    if (!nullToAbsent || retailChangedAt != null) {
+      map['retail_changed_at'] = Variable<String>(retailChangedAt);
+    }
     return map;
   }
 
@@ -2135,6 +2196,12 @@ class Product extends DataClass implements Insertable<Product> {
       pendingRetail: pendingRetail == null && nullToAbsent
           ? const Value.absent()
           : Value(pendingRetail),
+      retailPrev: retailPrev == null && nullToAbsent
+          ? const Value.absent()
+          : Value(retailPrev),
+      retailChangedAt: retailChangedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(retailChangedAt),
     );
   }
 
@@ -2158,6 +2225,8 @@ class Product extends DataClass implements Insertable<Product> {
       deletedAt: serializer.fromJson<String?>(json['deleted_at']),
       publishedAt: serializer.fromJson<String?>(json['published_at']),
       pendingRetail: serializer.fromJson<int?>(json['pending_retail']),
+      retailPrev: serializer.fromJson<int?>(json['retail_prev']),
+      retailChangedAt: serializer.fromJson<String?>(json['retail_changed_at']),
     );
   }
   @override
@@ -2178,6 +2247,8 @@ class Product extends DataClass implements Insertable<Product> {
       'deleted_at': serializer.toJson<String?>(deletedAt),
       'published_at': serializer.toJson<String?>(publishedAt),
       'pending_retail': serializer.toJson<int?>(pendingRetail),
+      'retail_prev': serializer.toJson<int?>(retailPrev),
+      'retail_changed_at': serializer.toJson<String?>(retailChangedAt),
     };
   }
 
@@ -2196,6 +2267,8 @@ class Product extends DataClass implements Insertable<Product> {
     Value<String?> deletedAt = const Value.absent(),
     Value<String?> publishedAt = const Value.absent(),
     Value<int?> pendingRetail = const Value.absent(),
+    Value<int?> retailPrev = const Value.absent(),
+    Value<String?> retailChangedAt = const Value.absent(),
   }) => Product(
     id: id.present ? id.value : this.id,
     name: name ?? this.name,
@@ -2217,6 +2290,10 @@ class Product extends DataClass implements Insertable<Product> {
     pendingRetail: pendingRetail.present
         ? pendingRetail.value
         : this.pendingRetail,
+    retailPrev: retailPrev.present ? retailPrev.value : this.retailPrev,
+    retailChangedAt: retailChangedAt.present
+        ? retailChangedAt.value
+        : this.retailChangedAt,
   );
   Product copyWithCompanion(ProductsCompanion data) {
     return Product(
@@ -2248,6 +2325,12 @@ class Product extends DataClass implements Insertable<Product> {
       pendingRetail: data.pendingRetail.present
           ? data.pendingRetail.value
           : this.pendingRetail,
+      retailPrev: data.retailPrev.present
+          ? data.retailPrev.value
+          : this.retailPrev,
+      retailChangedAt: data.retailChangedAt.present
+          ? data.retailChangedAt.value
+          : this.retailChangedAt,
     );
   }
 
@@ -2267,7 +2350,9 @@ class Product extends DataClass implements Insertable<Product> {
           ..write('updatedAt: $updatedAt, ')
           ..write('deletedAt: $deletedAt, ')
           ..write('publishedAt: $publishedAt, ')
-          ..write('pendingRetail: $pendingRetail')
+          ..write('pendingRetail: $pendingRetail, ')
+          ..write('retailPrev: $retailPrev, ')
+          ..write('retailChangedAt: $retailChangedAt')
           ..write(')'))
         .toString();
   }
@@ -2288,6 +2373,8 @@ class Product extends DataClass implements Insertable<Product> {
     deletedAt,
     publishedAt,
     pendingRetail,
+    retailPrev,
+    retailChangedAt,
   );
   @override
   bool operator ==(Object other) =>
@@ -2306,7 +2393,9 @@ class Product extends DataClass implements Insertable<Product> {
           other.updatedAt == this.updatedAt &&
           other.deletedAt == this.deletedAt &&
           other.publishedAt == this.publishedAt &&
-          other.pendingRetail == this.pendingRetail);
+          other.pendingRetail == this.pendingRetail &&
+          other.retailPrev == this.retailPrev &&
+          other.retailChangedAt == this.retailChangedAt);
 }
 
 class ProductsCompanion extends UpdateCompanion<Product> {
@@ -2324,6 +2413,8 @@ class ProductsCompanion extends UpdateCompanion<Product> {
   final Value<String?> deletedAt;
   final Value<String?> publishedAt;
   final Value<int?> pendingRetail;
+  final Value<int?> retailPrev;
+  final Value<String?> retailChangedAt;
   final Value<int> rowid;
   const ProductsCompanion({
     this.id = const Value.absent(),
@@ -2340,6 +2431,8 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     this.deletedAt = const Value.absent(),
     this.publishedAt = const Value.absent(),
     this.pendingRetail = const Value.absent(),
+    this.retailPrev = const Value.absent(),
+    this.retailChangedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ProductsCompanion.insert({
@@ -2357,6 +2450,8 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     this.deletedAt = const Value.absent(),
     this.publishedAt = const Value.absent(),
     this.pendingRetail = const Value.absent(),
+    this.retailPrev = const Value.absent(),
+    this.retailChangedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : name = Value(name);
   static Insertable<Product> custom({
@@ -2374,6 +2469,8 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     Expression<String>? deletedAt,
     Expression<String>? publishedAt,
     Expression<int>? pendingRetail,
+    Expression<int>? retailPrev,
+    Expression<String>? retailChangedAt,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -2391,6 +2488,8 @@ class ProductsCompanion extends UpdateCompanion<Product> {
       if (deletedAt != null) 'deleted_at': deletedAt,
       if (publishedAt != null) 'published_at': publishedAt,
       if (pendingRetail != null) 'pending_retail': pendingRetail,
+      if (retailPrev != null) 'retail_prev': retailPrev,
+      if (retailChangedAt != null) 'retail_changed_at': retailChangedAt,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -2410,6 +2509,8 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     Value<String?>? deletedAt,
     Value<String?>? publishedAt,
     Value<int?>? pendingRetail,
+    Value<int?>? retailPrev,
+    Value<String?>? retailChangedAt,
     Value<int>? rowid,
   }) {
     return ProductsCompanion(
@@ -2427,6 +2528,8 @@ class ProductsCompanion extends UpdateCompanion<Product> {
       deletedAt: deletedAt ?? this.deletedAt,
       publishedAt: publishedAt ?? this.publishedAt,
       pendingRetail: pendingRetail ?? this.pendingRetail,
+      retailPrev: retailPrev ?? this.retailPrev,
+      retailChangedAt: retailChangedAt ?? this.retailChangedAt,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -2476,6 +2579,12 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     if (pendingRetail.present) {
       map['pending_retail'] = Variable<int>(pendingRetail.value);
     }
+    if (retailPrev.present) {
+      map['retail_prev'] = Variable<int>(retailPrev.value);
+    }
+    if (retailChangedAt.present) {
+      map['retail_changed_at'] = Variable<String>(retailChangedAt.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -2499,6 +2608,8 @@ class ProductsCompanion extends UpdateCompanion<Product> {
           ..write('deletedAt: $deletedAt, ')
           ..write('publishedAt: $publishedAt, ')
           ..write('pendingRetail: $pendingRetail, ')
+          ..write('retailPrev: $retailPrev, ')
+          ..write('retailChangedAt: $retailChangedAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -4889,7 +5000,7 @@ class CurrentSupplierPrices
   String get entityName => 'current_supplier_prices';
   @override
   Map<SqlDialect, String> get createViewStatements => {
-    SqlDialect.sqlite: 'CREATE VIEW current_supplier_prices AS SELECT product_id, supplier_id, unit_price, observed_at FROM (SELECT product_id, supplier_id, unit_price, observed_at, ROW_NUMBER()OVER (PARTITION BY product_id, supplier_id ORDER BY observed_at DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE NO OTHERS) AS rn FROM supplier_prices) WHERE rn = 1',
+    SqlDialect.sqlite: 'CREATE VIEW current_supplier_prices AS SELECT product_id, supplier_id, unit_price, observed_at FROM (SELECT product_id, supplier_id, unit_price, observed_at, ROW_NUMBER()OVER (PARTITION BY product_id, supplier_id ORDER BY observed_at DESC, "rowid" DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE NO OTHERS) AS rn FROM supplier_prices) WHERE rn = 1',
   };
   @override
   CurrentSupplierPrices get asDslTable => this;
@@ -5225,6 +5336,10 @@ abstract class _$OwnerDatabase extends GeneratedDatabase {
     'CREATE TRIGGER products_touch AFTER UPDATE OF name, model, category_id, unit, photo_remote_path, retail_price, deleted_at ON products BEGIN UPDATE products SET updated_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE id = NEW.id;END',
     'products_touch',
   );
+  late final Trigger productsRetailChanged = Trigger(
+    'CREATE TRIGGER products_retail_changed AFTER UPDATE OF retail_price ON products WHEN OLD.retail_price IS NOT NULL AND NEW.retail_price IS NOT OLD.retail_price BEGIN UPDATE products SET retail_prev = OLD.retail_price, retail_changed_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE id = NEW.id;END',
+    'products_retail_changed',
+  );
   late final Trigger categoriesTouch = Trigger(
     'CREATE TRIGGER categories_touch AFTER UPDATE OF name ON categories BEGIN UPDATE products SET updated_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE category_id = NEW.id;END',
     'categories_touch',
@@ -5250,6 +5365,7 @@ abstract class _$OwnerDatabase extends GeneratedDatabase {
     currentSupplierPrices,
     productsToPublish,
     productsTouch,
+    productsRetailChanged,
     categoriesTouch,
   ];
   @override
@@ -5323,6 +5439,13 @@ abstract class _$OwnerDatabase extends GeneratedDatabase {
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('po_pages', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'products',
+        limitUpdateKind: UpdateKind.update,
+      ),
+      result: [TableUpdate('products', kind: UpdateKind.update)],
     ),
     WritePropagation(
       on: TableUpdateQuery.onTableName(
@@ -6684,6 +6807,8 @@ typedef $ProductsCreateCompanionBuilder = ProductsCompanion Function({
   Value<String?> deletedAt,
   Value<String?> publishedAt,
   Value<int?> pendingRetail,
+  Value<int?> retailPrev,
+  Value<String?> retailChangedAt,
   Value<int> rowid,
 });
 typedef $ProductsUpdateCompanionBuilder = ProductsCompanion Function({
@@ -6701,6 +6826,8 @@ typedef $ProductsUpdateCompanionBuilder = ProductsCompanion Function({
   Value<String?> deletedAt,
   Value<String?> publishedAt,
   Value<int?> pendingRetail,
+  Value<int?> retailPrev,
+  Value<String?> retailChangedAt,
   Value<int> rowid,
 });
 
@@ -6850,6 +6977,16 @@ class $ProductsFilterComposer extends Composer<_$OwnerDatabase, Products> {
 
   ColumnFilters<int> get pendingRetail => $composableBuilder(
     column: $table.pendingRetail,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get retailPrev => $composableBuilder(
+    column: $table.retailPrev,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get retailChangedAt => $composableBuilder(
+    column: $table.retailChangedAt,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -7025,6 +7162,16 @@ class $ProductsOrderingComposer extends Composer<_$OwnerDatabase, Products> {
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get retailPrev => $composableBuilder(
+    column: $table.retailPrev,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get retailChangedAt => $composableBuilder(
+    column: $table.retailChangedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $CategoriesOrderingComposer get categoryId {
     final $CategoriesOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -7105,6 +7252,16 @@ class $ProductsAnnotationComposer extends Composer<_$OwnerDatabase, Products> {
 
   GeneratedColumn<int> get pendingRetail => $composableBuilder(
     column: $table.pendingRetail,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get retailPrev => $composableBuilder(
+    column: $table.retailPrev,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get retailChangedAt => $composableBuilder(
+    column: $table.retailChangedAt,
     builder: (column) => column,
   );
 
@@ -7254,6 +7411,8 @@ class $ProductsTableManager
                 Value<String?> deletedAt = const Value.absent(),
                 Value<String?> publishedAt = const Value.absent(),
                 Value<int?> pendingRetail = const Value.absent(),
+                Value<int?> retailPrev = const Value.absent(),
+                Value<String?> retailChangedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ProductsCompanion(
                 id: id,
@@ -7270,6 +7429,8 @@ class $ProductsTableManager
                 deletedAt: deletedAt,
                 publishedAt: publishedAt,
                 pendingRetail: pendingRetail,
+                retailPrev: retailPrev,
+                retailChangedAt: retailChangedAt,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -7288,6 +7449,8 @@ class $ProductsTableManager
                 Value<String?> deletedAt = const Value.absent(),
                 Value<String?> publishedAt = const Value.absent(),
                 Value<int?> pendingRetail = const Value.absent(),
+                Value<int?> retailPrev = const Value.absent(),
+                Value<String?> retailChangedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ProductsCompanion.insert(
                 id: id,
@@ -7304,6 +7467,8 @@ class $ProductsTableManager
                 deletedAt: deletedAt,
                 publishedAt: publishedAt,
                 pendingRetail: pendingRetail,
+                retailPrev: retailPrev,
+                retailChangedAt: retailChangedAt,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
