@@ -1839,6 +1839,16 @@ class Products extends Table with TableInfo<Products, Product> {
     requiredDuringInsert: false,
     $customConstraints: '',
   );
+  static const VerificationMeta _ignoredRecommendationMeta =
+      const VerificationMeta('ignoredRecommendation');
+  late final GeneratedColumn<int> ignoredRecommendation = GeneratedColumn<int>(
+    'ignored_recommendation',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    $customConstraints: '',
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1857,6 +1867,7 @@ class Products extends Table with TableInfo<Products, Product> {
     pendingRetail,
     retailPrev,
     retailChangedAt,
+    ignoredRecommendation,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1986,6 +1997,15 @@ class Products extends Table with TableInfo<Products, Product> {
         ),
       );
     }
+    if (data.containsKey('ignored_recommendation')) {
+      context.handle(
+        _ignoredRecommendationMeta,
+        ignoredRecommendation.isAcceptableOrUnknown(
+          data['ignored_recommendation']!,
+          _ignoredRecommendationMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -2059,6 +2079,10 @@ class Products extends Table with TableInfo<Products, Product> {
         DriftSqlType.string,
         data['${effectivePrefix}retail_changed_at'],
       ),
+      ignoredRecommendation: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}ignored_recommendation'],
+      ),
     );
   }
 
@@ -2102,6 +2126,11 @@ class Product extends DataClass implements Insertable<Product> {
   /// every way of changing the price is covered. NULL = no change recorded yet.
   final int? retailPrev;
   final String? retailChangedAt;
+
+  /// The recommended price (margin below the limit) the owner chose to ignore.
+  /// The card stays hidden while the recommendation is still this price; the
+  /// price edit dialog keeps offering it. Never published.
+  final int? ignoredRecommendation;
   const Product({
     this.id,
     required this.name,
@@ -2119,6 +2148,7 @@ class Product extends DataClass implements Insertable<Product> {
     this.pendingRetail,
     this.retailPrev,
     this.retailChangedAt,
+    this.ignoredRecommendation,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -2161,6 +2191,9 @@ class Product extends DataClass implements Insertable<Product> {
     if (!nullToAbsent || retailChangedAt != null) {
       map['retail_changed_at'] = Variable<String>(retailChangedAt);
     }
+    if (!nullToAbsent || ignoredRecommendation != null) {
+      map['ignored_recommendation'] = Variable<int>(ignoredRecommendation);
+    }
     return map;
   }
 
@@ -2202,6 +2235,9 @@ class Product extends DataClass implements Insertable<Product> {
       retailChangedAt: retailChangedAt == null && nullToAbsent
           ? const Value.absent()
           : Value(retailChangedAt),
+      ignoredRecommendation: ignoredRecommendation == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ignoredRecommendation),
     );
   }
 
@@ -2227,6 +2263,9 @@ class Product extends DataClass implements Insertable<Product> {
       pendingRetail: serializer.fromJson<int?>(json['pending_retail']),
       retailPrev: serializer.fromJson<int?>(json['retail_prev']),
       retailChangedAt: serializer.fromJson<String?>(json['retail_changed_at']),
+      ignoredRecommendation: serializer.fromJson<int?>(
+        json['ignored_recommendation'],
+      ),
     );
   }
   @override
@@ -2249,6 +2288,7 @@ class Product extends DataClass implements Insertable<Product> {
       'pending_retail': serializer.toJson<int?>(pendingRetail),
       'retail_prev': serializer.toJson<int?>(retailPrev),
       'retail_changed_at': serializer.toJson<String?>(retailChangedAt),
+      'ignored_recommendation': serializer.toJson<int?>(ignoredRecommendation),
     };
   }
 
@@ -2269,6 +2309,7 @@ class Product extends DataClass implements Insertable<Product> {
     Value<int?> pendingRetail = const Value.absent(),
     Value<int?> retailPrev = const Value.absent(),
     Value<String?> retailChangedAt = const Value.absent(),
+    Value<int?> ignoredRecommendation = const Value.absent(),
   }) => Product(
     id: id.present ? id.value : this.id,
     name: name ?? this.name,
@@ -2294,6 +2335,9 @@ class Product extends DataClass implements Insertable<Product> {
     retailChangedAt: retailChangedAt.present
         ? retailChangedAt.value
         : this.retailChangedAt,
+    ignoredRecommendation: ignoredRecommendation.present
+        ? ignoredRecommendation.value
+        : this.ignoredRecommendation,
   );
   Product copyWithCompanion(ProductsCompanion data) {
     return Product(
@@ -2331,6 +2375,9 @@ class Product extends DataClass implements Insertable<Product> {
       retailChangedAt: data.retailChangedAt.present
           ? data.retailChangedAt.value
           : this.retailChangedAt,
+      ignoredRecommendation: data.ignoredRecommendation.present
+          ? data.ignoredRecommendation.value
+          : this.ignoredRecommendation,
     );
   }
 
@@ -2352,7 +2399,8 @@ class Product extends DataClass implements Insertable<Product> {
           ..write('publishedAt: $publishedAt, ')
           ..write('pendingRetail: $pendingRetail, ')
           ..write('retailPrev: $retailPrev, ')
-          ..write('retailChangedAt: $retailChangedAt')
+          ..write('retailChangedAt: $retailChangedAt, ')
+          ..write('ignoredRecommendation: $ignoredRecommendation')
           ..write(')'))
         .toString();
   }
@@ -2375,6 +2423,7 @@ class Product extends DataClass implements Insertable<Product> {
     pendingRetail,
     retailPrev,
     retailChangedAt,
+    ignoredRecommendation,
   );
   @override
   bool operator ==(Object other) =>
@@ -2395,7 +2444,8 @@ class Product extends DataClass implements Insertable<Product> {
           other.publishedAt == this.publishedAt &&
           other.pendingRetail == this.pendingRetail &&
           other.retailPrev == this.retailPrev &&
-          other.retailChangedAt == this.retailChangedAt);
+          other.retailChangedAt == this.retailChangedAt &&
+          other.ignoredRecommendation == this.ignoredRecommendation);
 }
 
 class ProductsCompanion extends UpdateCompanion<Product> {
@@ -2415,6 +2465,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
   final Value<int?> pendingRetail;
   final Value<int?> retailPrev;
   final Value<String?> retailChangedAt;
+  final Value<int?> ignoredRecommendation;
   final Value<int> rowid;
   const ProductsCompanion({
     this.id = const Value.absent(),
@@ -2433,6 +2484,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     this.pendingRetail = const Value.absent(),
     this.retailPrev = const Value.absent(),
     this.retailChangedAt = const Value.absent(),
+    this.ignoredRecommendation = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ProductsCompanion.insert({
@@ -2452,6 +2504,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     this.pendingRetail = const Value.absent(),
     this.retailPrev = const Value.absent(),
     this.retailChangedAt = const Value.absent(),
+    this.ignoredRecommendation = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : name = Value(name);
   static Insertable<Product> custom({
@@ -2471,6 +2524,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     Expression<int>? pendingRetail,
     Expression<int>? retailPrev,
     Expression<String>? retailChangedAt,
+    Expression<int>? ignoredRecommendation,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -2490,6 +2544,8 @@ class ProductsCompanion extends UpdateCompanion<Product> {
       if (pendingRetail != null) 'pending_retail': pendingRetail,
       if (retailPrev != null) 'retail_prev': retailPrev,
       if (retailChangedAt != null) 'retail_changed_at': retailChangedAt,
+      if (ignoredRecommendation != null)
+        'ignored_recommendation': ignoredRecommendation,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -2511,6 +2567,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     Value<int?>? pendingRetail,
     Value<int?>? retailPrev,
     Value<String?>? retailChangedAt,
+    Value<int?>? ignoredRecommendation,
     Value<int>? rowid,
   }) {
     return ProductsCompanion(
@@ -2530,6 +2587,8 @@ class ProductsCompanion extends UpdateCompanion<Product> {
       pendingRetail: pendingRetail ?? this.pendingRetail,
       retailPrev: retailPrev ?? this.retailPrev,
       retailChangedAt: retailChangedAt ?? this.retailChangedAt,
+      ignoredRecommendation:
+          ignoredRecommendation ?? this.ignoredRecommendation,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -2585,6 +2644,11 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     if (retailChangedAt.present) {
       map['retail_changed_at'] = Variable<String>(retailChangedAt.value);
     }
+    if (ignoredRecommendation.present) {
+      map['ignored_recommendation'] = Variable<int>(
+        ignoredRecommendation.value,
+      );
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -2610,6 +2674,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
           ..write('pendingRetail: $pendingRetail, ')
           ..write('retailPrev: $retailPrev, ')
           ..write('retailChangedAt: $retailChangedAt, ')
+          ..write('ignoredRecommendation: $ignoredRecommendation, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -6809,6 +6874,7 @@ typedef $ProductsCreateCompanionBuilder = ProductsCompanion Function({
   Value<int?> pendingRetail,
   Value<int?> retailPrev,
   Value<String?> retailChangedAt,
+  Value<int?> ignoredRecommendation,
   Value<int> rowid,
 });
 typedef $ProductsUpdateCompanionBuilder = ProductsCompanion Function({
@@ -6828,6 +6894,7 @@ typedef $ProductsUpdateCompanionBuilder = ProductsCompanion Function({
   Value<int?> pendingRetail,
   Value<int?> retailPrev,
   Value<String?> retailChangedAt,
+  Value<int?> ignoredRecommendation,
   Value<int> rowid,
 });
 
@@ -6987,6 +7054,11 @@ class $ProductsFilterComposer extends Composer<_$OwnerDatabase, Products> {
 
   ColumnFilters<String> get retailChangedAt => $composableBuilder(
     column: $table.retailChangedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get ignoredRecommendation => $composableBuilder(
+    column: $table.ignoredRecommendation,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -7172,6 +7244,11 @@ class $ProductsOrderingComposer extends Composer<_$OwnerDatabase, Products> {
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get ignoredRecommendation => $composableBuilder(
+    column: $table.ignoredRecommendation,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $CategoriesOrderingComposer get categoryId {
     final $CategoriesOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -7262,6 +7339,11 @@ class $ProductsAnnotationComposer extends Composer<_$OwnerDatabase, Products> {
 
   GeneratedColumn<String> get retailChangedAt => $composableBuilder(
     column: $table.retailChangedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get ignoredRecommendation => $composableBuilder(
+    column: $table.ignoredRecommendation,
     builder: (column) => column,
   );
 
@@ -7413,6 +7495,7 @@ class $ProductsTableManager
                 Value<int?> pendingRetail = const Value.absent(),
                 Value<int?> retailPrev = const Value.absent(),
                 Value<String?> retailChangedAt = const Value.absent(),
+                Value<int?> ignoredRecommendation = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ProductsCompanion(
                 id: id,
@@ -7431,6 +7514,7 @@ class $ProductsTableManager
                 pendingRetail: pendingRetail,
                 retailPrev: retailPrev,
                 retailChangedAt: retailChangedAt,
+                ignoredRecommendation: ignoredRecommendation,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -7451,6 +7535,7 @@ class $ProductsTableManager
                 Value<int?> pendingRetail = const Value.absent(),
                 Value<int?> retailPrev = const Value.absent(),
                 Value<String?> retailChangedAt = const Value.absent(),
+                Value<int?> ignoredRecommendation = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ProductsCompanion.insert(
                 id: id,
@@ -7469,6 +7554,7 @@ class $ProductsTableManager
                 pendingRetail: pendingRetail,
                 retailPrev: retailPrev,
                 retailChangedAt: retailChangedAt,
+                ignoredRecommendation: ignoredRecommendation,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

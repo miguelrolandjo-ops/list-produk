@@ -65,7 +65,11 @@ CREATE TABLE products (
   -- lalu (sebelumnya Rp 10.000)". Kept by the products_retail_changed trigger, so
   -- every way of changing the price is covered. NULL = no change recorded yet.
   retail_prev        INTEGER,
-  retail_changed_at  TEXT
+  retail_changed_at  TEXT,
+  -- The recommended price (margin below the limit) the owner chose to ignore.
+  -- The card stays hidden while the recommendation is still this price; the
+  -- price edit dialog keeps offering it. Never published.
+  ignored_recommendation INTEGER
 );
 CREATE INDEX products_name ON products (name);
 

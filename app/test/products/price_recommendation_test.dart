@@ -109,6 +109,55 @@ void main() {
       expect(await service.recommendation(id), isNull); // no longer below the limit
     });
 
+    test('ignoring hides the card only while the recommendation stays the same', () async {
+      final id = await add();
+      await newPrice(id, 12000); // recommends 20.000
+      expect((await service.detail(id))!.recommendationIgnored, isFalse);
+
+      await service.ignoreRecommendation(id);
+      var d = (await service.detail(id))!;
+      expect(d.recommendationIgnored, isTrue);
+      expect(d.recommendation!.recommendedRetail, 20000); // dialog still offers it
+      expect((await product(id)).retailPrice, 15000); // nothing changed
+
+      await newPrice(id, 18000); // a different recommendation: ask again
+      d = (await service.detail(id))!;
+      expect(d.recommendation!.recommendedRetail, isNot(20000));
+      expect(d.recommendationIgnored, isFalse);
+    });
+
+    test('ignoring without a recommendation does nothing', () async {
+      final id = await add();
+      await service.ignoreRecommendation(id);
+      expect((await product(id)).ignoredRecommendation, isNull);
+    });
+
+    test('addSupplierPrice adds a supplier and counts for the margin', () async {
+      final id = await add();
+      await service.addSupplierPrice(id, supplierName: 'UD Baru', unitPrice: 12000);
+      final d = (await service.detail(id))!;
+      expect(d.currentPrices.map((e) => e.supplierName), containsAll(['CV Maju', 'UD Baru']));
+      expect(d.marginSupply, 12000); // the latest PO price
+      expect(d.recommendation, isNotNull); // 15.000 is now 20% (< 30%)
+    });
+
+    test('addSupplierPrice refuses a supplier the product already has, and bad input', () async {
+      final id = await add();
+      expect(
+        () => service.addSupplierPrice(id, supplierName: 'cv maju', unitPrice: 9000),
+        throwsArgumentError,
+      );
+      expect(
+        () => service.addSupplierPrice(id, supplierName: ' ', unitPrice: 9000),
+        throwsArgumentError,
+      );
+      expect(
+        () => service.addSupplierPrice(id, supplierName: 'UD Baru', unitPrice: 0),
+        throwsArgumentError,
+      );
+      expect((await service.detail(id))!.currentPrices, hasLength(1));
+    });
+
     test('a manual price below the limit gets a recommendation and stays manual', () async {
       final id = await add(retail: 11000); // 13,6% margin at 9.500
       final r = (await service.recommendation(id))!;

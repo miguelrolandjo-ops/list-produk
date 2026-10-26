@@ -9,6 +9,7 @@ import '../core/time_ago.dart';
 import '../data/owner_database.dart' show Product;
 import '../core/thousands_formatter.dart';
 import '../pricing/margin.dart';
+import 'name_field.dart';
 import 'product_service.dart';
 
 final _date = DateFormat('d MMM y', 'id_ID');
@@ -126,6 +127,36 @@ class ProductDetailScreen extends ConsumerWidget {
       );
   }
 
+  Future<void> _ignoreRecommendation(WidgetRef ref) async {
+    await ref.read(productServiceProvider).ignoreRecommendation(productId);
+    ref.invalidate(productDetailProvider(productId));
+  }
+
+  Future<void> _addSupplier(BuildContext context, WidgetRef ref) async {
+    final service = ref.read(productServiceProvider);
+    final names = await service.supplierNames();
+    if (!context.mounted) return;
+    final result = await showDialog<(String, int)>(
+      context: context,
+      builder: (_) => _AddSupplierDialog(supplierNames: names),
+    );
+    if (result == null) return;
+    try {
+      await service.addSupplierPrice(
+        productId,
+        supplierName: result.$1,
+        unitPrice: result.$2,
+      );
+    } on ArgumentError catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${e.message}')),
+      );
+      return;
+    }
+    ref.invalidate(productDetailProvider(productId));
+  }
+
   Future<void> _dismissSuggestion(BuildContext context, WidgetRef ref) async {
     final messenger = ScaffoldMessenger.of(context);
     await ref.read(productServiceProvider).dismissSuggestion(productId);
@@ -180,7 +211,10 @@ class ProductDetailScreen extends ConsumerWidget {
   ) async {
     final price = await showDialog<int>(
       context: context,
-      builder: (_) => _EditPriceDialog(initial: detail.product.retailPrice),
+      builder: (_) => _EditPriceDialog(
+        initial: detail.product.retailPrice,
+        recommendation: detail.recommendation,
+      ),
     );
     if (price == null) return;
     await ref
@@ -222,6 +256,8 @@ class ProductDetailScreen extends ConsumerWidget {
             onMargin: () => context.push('/pengaturan/harga'),
             onApplyRecommendation: () =>
                 _applyRecommendation(context, ref, d.recommendation!),
+            onIgnoreRecommendation: () => _ignoreRecommendation(ref),
+            onAddSupplier: () => _addSupplier(context, ref),
             onApplySuggestion: () => _applySuggestion(context, ref, d),
             onDismissSuggestion: () => _dismissSuggestion(context, ref),
           );
@@ -235,9 +271,12 @@ class ProductDetailScreen extends ConsumerWidget {
 /// animation has finished (disposing it right after showDialog returns
 /// crashes while the field is still on screen).
 class _EditPriceDialog extends StatefulWidget {
-  const _EditPriceDialog({this.initial});
+  const _EditPriceDialog({this.initial, this.recommendation});
 
   final int? initial;
+
+  /// Offered as a one-tap option, even if its card was ignored.
+  final PriceRecommendation? recommendation;
 
   @override
   State<_EditPriceDialog> createState() => _EditPriceDialogState();
@@ -268,17 +307,37 @@ class _EditPriceDialogState extends State<_EditPriceDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Ubah harga jual'),
-      content: TextField(
-        controller: _controller,
-        autofocus: true,
-        keyboardType: TextInputType.number,
-        inputFormatters: const [ThousandsFormatter()],
-        decoration: InputDecoration(
-          prefixText: 'Rp ',
-          errorText: _error,
-          helperText: 'Tidak dihitung ulang otomatis.',
-          helperMaxLines: 2,
-        ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            inputFormatters: const [ThousandsFormatter()],
+            decoration: InputDecoration(
+              prefixText: 'Rp ',
+              errorText: _error,
+              helperText: 'Tidak dihitung ulang otomatis.',
+              helperMaxLines: 2,
+            ),
+          ),
+          if (widget.recommendation case final r?) ...[
+            const SizedBox(height: 12),
+            ActionChip(
+              avatar: const Icon(Icons.lightbulb_outline, size: 18),
+              label: Text(
+                'Disarankan ${formatRupiah(r.recommendedRetail)} '
+                '(margin ${_pct.format(r.recommendedMargin)}%)',
+              ),
+              onPressed: () => setState(() {
+                _error = null;
+                _controller.text = groupThousands(r.recommendedRetail);
+              }),
+            ),
+          ],
+        ],
       ),
       actions: [
         TextButton(
@@ -300,6 +359,8 @@ class _Body extends StatelessWidget {
     required this.onApplySuggestion,
     required this.onDismissSuggestion,
     required this.onApplyRecommendation,
+    required this.onIgnoreRecommendation,
+    required this.onAddSupplier,
   });
 
   final ProductDetail detail;
@@ -315,6 +376,10 @@ class _Body extends StatelessWidget {
 
   /// Confirmed (second click) recommended price for a below-margin product.
   final VoidCallback onApplyRecommendation;
+
+  /// "Abaikan": hides the recommendation card (the edit dialog still offers it).
+  final VoidCallback onIgnoreRecommendation;
+  final VoidCallback onAddSupplier;
 
   @override
   Widget build(BuildContext context) {
@@ -347,10 +412,16 @@ class _Body extends StatelessWidget {
               // It takes over from the plain suggestion (it is the suggestion
               // itself when that already reaches the limit).
               if (detail.recommendation case final r?)
-                _RecommendationCard(
-                  recommendation: r,
-                  onConfirmed: onApplyRecommendation,
-                )
+                // Ignored: no card at all (the plain suggestion stays hidden
+                // too); the price edit dialog still offers the price.
+                if (!detail.recommendationIgnored)
+                  _RecommendationCard(
+                    recommendation: r,
+                    onConfirmed: onApplyRecommendation,
+                    onIgnore: onIgnoreRecommendation,
+                  )
+                else
+                  const SizedBox.shrink()
               else if (p.pendingRetail != null &&
                   p.retailIsOverride == 0 &&
                   retail != null)
@@ -456,7 +527,21 @@ class _Body extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 16),
-              Text('Harga supplier', style: theme.textTheme.titleSmall),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Harga supplier',
+                      style: theme.textTheme.titleSmall,
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: onAddSupplier,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Tambah supplier'),
+                  ),
+                ],
+              ),
               for (final e in detail.currentPrices)
                 ListTile(
                   contentPadding: EdgeInsets.zero,
@@ -593,10 +678,12 @@ class _RecommendationCard extends StatefulWidget {
   const _RecommendationCard({
     required this.recommendation,
     required this.onConfirmed,
+    required this.onIgnore,
   });
 
   final PriceRecommendation recommendation;
   final VoidCallback onConfirmed;
+  final VoidCallback onIgnore;
 
   @override
   State<_RecommendationCard> createState() => _RecommendationCardState();
@@ -639,12 +726,19 @@ class _RecommendationCardState extends State<_RecommendationCard> {
             ),
             const SizedBox(height: 8),
             if (!_confirming)
-              Align(
-                alignment: Alignment.centerRight,
-                child: FilledButton(
-                  onPressed: () => setState(() => _confirming = true),
-                  child: Text('Ubah ke ${formatRupiah(r.recommendedRetail)}'),
-                ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: widget.onIgnore,
+                    child: const Text('Abaikan'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: () => setState(() => _confirming = true),
+                    child: Text('Ubah ke ${formatRupiah(r.recommendedRetail)}'),
+                  ),
+                ],
               )
             else ...[
               Text(
@@ -671,6 +765,79 @@ class _RecommendationCardState extends State<_RecommendationCard> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Supplier name (existing or new) and price for one more supplier of the
+/// product. Owns its controller, like [_EditPriceDialog].
+class _AddSupplierDialog extends StatefulWidget {
+  const _AddSupplierDialog({required this.supplierNames});
+
+  final List<String> supplierNames;
+
+  @override
+  State<_AddSupplierDialog> createState() => _AddSupplierDialogState();
+}
+
+class _AddSupplierDialogState extends State<_AddSupplierDialog> {
+  final _price = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+  String _supplier = '';
+
+  @override
+  void dispose() {
+    _price.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.pop(context, (_supplier.trim(), parseGrouped(_price.text)!));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Tambah supplier'),
+      content: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            NameField(
+              label: 'Supplier',
+              options: widget.supplierNames,
+              onChanged: (v) => _supplier = v,
+              validator: (v) =>
+                  (v ?? '').trim().isEmpty ? 'Supplier wajib diisi' : null,
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _price,
+              keyboardType: TextInputType.number,
+              inputFormatters: const [ThousandsFormatter()],
+              decoration: const InputDecoration(
+                labelText: 'Harga',
+                prefixText: 'Rp ',
+              ),
+              validator: (v) {
+                final n = parseGrouped(v ?? '');
+                return n == null || n <= 0
+                    ? 'Harga supplier harus lebih dari 0'
+                    : null;
+              },
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Batal'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Simpan')),
+      ],
     );
   }
 }

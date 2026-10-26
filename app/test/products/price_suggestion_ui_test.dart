@@ -278,6 +278,50 @@ void main() {
       expect(find.text('Ubah ke Rp 20.000'), findsNothing); // no longer below the limit
     });
 
+    testWidgets('Abaikan hides the card for good, and Ubah harga still offers the price', (
+      tester,
+    ) async {
+      await pump(tester, location: '/', seed: () {});
+      final id = await add(tester, 'Kabel', newPrice: 12000);
+      await show(tester, '/produk/$id');
+
+      await tester.tap(find.text('Abaikan'));
+      await settle(tester);
+      await frames(tester);
+      expect(find.text('Ubah ke Rp 20.000'), findsNothing);
+      expect(find.text('Margin di bawah batas'), findsNothing);
+      expect(await retailOf(tester, id), 15000); // nothing changed
+
+      // The price dialog still has the recommended price as an option.
+      await tester.tap(find.text('Ubah harga'));
+      await frames(tester);
+      expect(find.text('Disarankan Rp 20.000 (margin 40%)'), findsOneWidget);
+      await tester.tap(find.text('Disarankan Rp 20.000 (margin 40%)'));
+      await tester.pump();
+      expect(find.widgetWithText(TextField, '20.000'), findsOneWidget);
+      await tester.tap(find.text('Simpan'));
+      await settle(tester);
+      await frames(tester);
+      expect(await retailOf(tester, id), 20000);
+    });
+
+    testWidgets('Tambah supplier adds a supplier with its price', (tester) async {
+      await pump(tester, location: '/', seed: () {});
+      final id = await add(tester, 'Kabel');
+      await show(tester, '/produk/$id');
+
+      await tester.tap(find.text('Tambah supplier'));
+      await frames(tester);
+      await tester.enterText(find.widgetWithText(TextFormField, 'Supplier'), 'UD Baru');
+      await tester.enterText(find.widgetWithText(TextFormField, 'Harga'), '8000');
+      await tester.tap(find.text('Simpan'));
+      await settle(tester);
+      await frames(tester);
+
+      expect(find.text('UD Baru'), findsOneWidget);
+      expect(find.text('Rp 8.000'), findsOneWidget);
+    });
+
     testWidgets('a manual price below the limit gets a recommendation too, and stays manual', (
       tester,
     ) async {

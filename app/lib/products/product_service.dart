@@ -116,6 +116,7 @@ class ProductDetail {
     required this.minMarginPct,
     required this.currentPrices,
     this.recommendation,
+    this.recommendationIgnored = false,
   });
 
   final Product product;
@@ -141,6 +142,10 @@ class ProductDetail {
 
   /// Set when the current retail price sells below the margin limit.
   final PriceRecommendation? recommendation;
+
+  /// The owner ignored this very recommendation: the card stays hidden, but the
+  /// price edit dialog still offers it.
+  final bool recommendationIgnored;
 }
 
 /// Immutable snapshot of the pricing rule's inputs. [calc] is synchronous, so
@@ -463,6 +468,45 @@ class ProductService {
         );
   }
 
+  /// The owner ignored the current recommendation. The card is hidden while the
+  /// recommendation stays this price; a different one (supplier price or rules
+  /// changed) is shown again. Does nothing if there is no recommendation.
+  Future<void> ignoreRecommendation(String productId) async {
+    final r = await recommendation(productId);
+    if (r == null) return;
+    await (_db.update(_db.products)..where((p) => p.id.equals(productId)))
+        .write(
+          ProductsCompanion(ignoredRecommendation: Value(r.recommendedRetail)),
+        );
+  }
+
+  /// Adds a supplier (new or existing, by name) to a product with its price.
+  /// Recorded like any PO price, so it counts for the margin and, unless the
+  /// price is manual, proposes a new retail price. A supplier that already has
+  /// a price for this product is refused: its price is changed in Ubah produk.
+  Future<void> addSupplierPrice(
+    String productId, {
+    required String supplierName,
+    required int unitPrice,
+  }) {
+    if (supplierName.trim().isEmpty) throw ArgumentError('Supplier wajib diisi');
+    _checkSupply(unitPrice);
+    return _db.transaction(() async {
+      final supplierId = await findOrCreateSupplier(supplierName);
+      final existing =
+          await (_db.select(_db.supplierPrices)..where(
+                (p) =>
+                    p.productId.equals(productId) &
+                    p.supplierId.equals(supplierId),
+              ))
+              .get();
+      if (existing.isNotEmpty) {
+        throw ArgumentError('Supplier ini sudah ada untuk produk ini');
+      }
+      await recordSupplierPrice(productId, supplierId, unitPrice);
+    });
+  }
+
   /// The owner said yes: the suggested price becomes the retail price (still
   /// a calculated one, so later price changes propose again). Does nothing if
   /// there is nothing pending.
@@ -522,6 +566,7 @@ class ProductService {
               ..orderBy([(c) => OrderingTerm.asc(c.unitPrice)]))
             .get();
     final settings = await _settings();
+    final rec = await recommendation(productId);
     final basisSupply = await _basisSupply(productId, settings);
     final marginSupply =
         (await marginSupplyPrices(productId: productId))[productId];
@@ -534,7 +579,10 @@ class ProductService {
       marginSupply: marginSupply,
       marginBasis: settings.marginBasis,
       marginAvgCount: settings.marginAvgCount,
-      recommendation: await recommendation(productId),
+      recommendation: rec,
+      recommendationIgnored:
+          rec != null &&
+          product.ignoredRecommendation == rec.recommendedRetail,
       minMarginPct: marginSupply == null
           ? null
           : minMarginFor(marginSupply, await marginThresholds()),

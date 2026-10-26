@@ -1,0 +1,2 @@
+- the recommended price change should also include 'ignore'. even if it is ignored, the next time Edit Harga Jual is opened, display the option set 
+- on each item detail, allow option to 'Add supplier', with field for Price

@@ -123,6 +123,7 @@ void main() {
     raw.execute('DROP TRIGGER products_retail_changed');
     raw.execute('ALTER TABLE products DROP COLUMN retail_prev');
     raw.execute('ALTER TABLE products DROP COLUMN retail_changed_at');
+    raw.execute('ALTER TABLE products DROP COLUMN ignored_recommendation');
     raw.execute("UPDATE settings SET basis = 'lowest'");
     raw.execute('PRAGMA user_version = 1');
     raw.close();
