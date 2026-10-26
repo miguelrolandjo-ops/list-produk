@@ -80,4 +80,15 @@ Server:
 
 ## Current status
 
-Current milestone: 2 (pricing settings and backup). Milestone 1 (local catalog) is verified done.
+Current milestone: 3 (server and employees), built but not yet verified on phones;
+see `docs/server-setup.md` for the Supabase Cloud steps and the "done when" check.
+Milestones 1 and 2 are verified done.
+
+Also added with Milestone 3: first-launch screen (create shop / restore / join),
+onboarding by shop type with starter categories and emoji (`lib/onboarding/`),
+category-first home with emoji cards, phone bottom bar / tablet sidebar
+(`lib/core/app_shell.dart`, look in `lib/core/ui.dart`). Owner schema is v6
+(`categories.emoji`).
+
+Run the app with the server: `flutter run --dart-define-from-file=config.json`
+(copy `config.example.json`). Without it the app runs offline.

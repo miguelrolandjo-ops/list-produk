@@ -673,8 +673,8 @@ class _SuggestionCard extends StatelessWidget {
 }
 
 /// "Margin di bawah batas": a recommended price that reaches the limit. Changing
-/// the price takes two clicks, "Ubah ke Rp X" and then the confirmation.
-class _RecommendationCard extends StatefulWidget {
+/// the price takes two clicks, "Ubah ke Rp X" and then the confirmation popup.
+class _RecommendationCard extends StatelessWidget {
   const _RecommendationCard({
     required this.recommendation,
     required this.onConfirmed,
@@ -685,18 +685,38 @@ class _RecommendationCard extends StatefulWidget {
   final VoidCallback onConfirmed;
   final VoidCallback onIgnore;
 
-  @override
-  State<_RecommendationCard> createState() => _RecommendationCardState();
-}
-
-class _RecommendationCardState extends State<_RecommendationCard> {
-  bool _confirming = false;
+  /// Second click: a popup asking once more. Nothing changes unless the owner
+  /// taps "Ya, ubah"; "Batal" or tapping outside leaves the price as it is.
+  Future<void> _confirm(BuildContext context) async {
+    final r = recommendation;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Ubah harga jual?'),
+        content: Text(
+          'Ubah harga jual dari ${formatRupiah(r.currentRetail)} '
+          'ke ${formatRupiah(r.recommendedRetail)}?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Ya, ubah'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) onConfirmed();
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final r = widget.recommendation;
+    final r = recommendation;
     final onColor = scheme.onErrorContainer;
     return Card(
       color: scheme.errorContainer,
@@ -725,43 +745,17 @@ class _RecommendationCardState extends State<_RecommendationCard> {
               style: TextStyle(color: onColor),
             ),
             const SizedBox(height: 8),
-            if (!_confirming)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: widget.onIgnore,
-                    child: const Text('Abaikan'),
-                  ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    onPressed: () => setState(() => _confirming = true),
-                    child: Text('Ubah ke ${formatRupiah(r.recommendedRetail)}'),
-                  ),
-                ],
-              )
-            else ...[
-              Text(
-                'Ubah harga jual dari ${formatRupiah(r.currentRetail)} '
-                'ke ${formatRupiah(r.recommendedRetail)}?',
-                style: TextStyle(color: onColor, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: () => setState(() => _confirming = false),
-                    child: const Text('Batal'),
-                  ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    onPressed: widget.onConfirmed,
-                    child: const Text('Ya, ubah'),
-                  ),
-                ],
-              ),
-            ],
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(onPressed: onIgnore, child: const Text('Abaikan')),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: () => _confirm(context),
+                  child: Text('Ubah ke ${formatRupiah(r.recommendedRetail)}'),
+                ),
+              ],
+            ),
           ],
         ),
       ),

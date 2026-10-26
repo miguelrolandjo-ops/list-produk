@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:drift/drift.dart' show Variable;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -9,12 +10,30 @@ import '../core/providers.dart';
 import '../backup/backup_screen.dart' show daysAgo;
 import '../backup/backup_service.dart' show backupReminderDue;
 import '../core/rupiah.dart';
+import '../core/ui.dart';
+import 'category_emoji.dart';
 import 'product_service.dart' show PriceSuggestion;
 import 'add_product_screen.dart' show productUnits;
 import 'name_field.dart';
 
+/// Products, optionally inside one category (opened from a category card).
 class ProductListScreen extends ConsumerStatefulWidget {
-  const ProductListScreen({super.key});
+  const ProductListScreen({
+    super.key,
+    this.categoryId,
+    this.categoryName,
+    this.title = 'Harga Toko',
+    this.autofocusSearch = false,
+  });
+
+  /// Opened from a category card: the list starts filtered to it, and the
+  /// title shows the category instead of [title].
+  final String? categoryId;
+  final String? categoryName;
+  final String title;
+
+  /// Opened from "Cari semua produk": the keyboard opens right away.
+  final bool autofocusSearch;
 
   @override
   ConsumerState<ProductListScreen> createState() => _ProductListScreenState();
@@ -33,9 +52,42 @@ class _ProductListScreenState extends ConsumerState<ProductListScreen> {
   final _selected = <String>{};
 
   @override
+  void initState() {
+    super.initState();
+    _categoryId = widget.categoryId;
+    _categoryName = widget.categoryName;
+    if (widget.categoryId != null) _loadPickedEmoji();
+  }
+
+  @override
   void dispose() {
     _debounce?.cancel();
     super.dispose();
+  }
+
+  /// The title: the category being shown when opened from a category card.
+  String get _title {
+    if (widget.categoryId == null || _categoryId == null) return widget.title;
+    final name = _categoryName ?? 'Kategori';
+    final emoji = _categoryId == uncategorizedFilter
+        ? noCategoryEmoji
+        : categoryEmoji(name, picked: _pickedEmoji);
+    return '$emoji  $name';
+  }
+
+  String? _pickedEmoji;
+
+  Future<void> _loadPickedEmoji() async {
+    final id = _categoryId;
+    if (id == null || id == uncategorizedFilter) return;
+    final row = await ref
+        .read(ownerDbProvider)
+        .customSelect(
+          'SELECT emoji FROM categories WHERE id = ?',
+          variables: [Variable.withString(id)],
+        )
+        .getSingleOrNull();
+    if (mounted) setState(() => _pickedEmoji = row?.readNullable<String>('emoji'));
   }
 
   /// Waits for a short pause in typing before querying, so fast typing
@@ -167,10 +219,15 @@ class _ProductListScreenState extends ConsumerState<ProductListScreen> {
             ? null
             : _CategoryDrawer(
                 selectedId: _categoryId,
-                onSelected: (id, name) => setState(() {
-                  _categoryId = id;
-                  _categoryName = name;
-                }),
+                onSelected: (id, name) {
+                  setState(() {
+                    _categoryId = id;
+                    _categoryName = name;
+                    _pickedEmoji = null;
+                  });
+                  // Only the category screen's title shows the emoji.
+                  if (widget.categoryId != null) _loadPickedEmoji();
+                },
                 onManage: _manageCategories,
               ),
         appBar: _selecting
@@ -199,7 +256,7 @@ class _ProductListScreenState extends ConsumerState<ProductListScreen> {
                 ],
               )
             : AppBar(
-                title: const Text('Harga Toko'),
+                title: Text(_title),
                 actions: [
                   if (suggestions.isNotEmpty)
                     IconButton(
@@ -232,17 +289,18 @@ class _ProductListScreenState extends ConsumerState<ProductListScreen> {
               ),
         body: Column(
           children: [
-            const _BackupBanner(),
+            const BackupBanner(),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
               child: SearchBar(
                 hintText: 'Cari nama atau model',
                 leading: const Icon(Icons.search),
                 elevation: const WidgetStatePropertyAll(0),
+                autoFocus: widget.autofocusSearch,
                 onChanged: _onSearchChanged,
               ),
             ),
-            if (_categoryId != null)
+            if (_categoryId != null && widget.categoryId == null)
               Align(
                 alignment: Alignment.centerLeft,
                 child: Padding(
@@ -271,6 +329,44 @@ class _ProductListScreenState extends ConsumerState<ProductListScreen> {
                             ? 'Belum ada produk'
                             : 'Tidak ada produk yang cocok',
                       ),
+                    );
+                  }
+                  // Large tablets: cards in a grid, like the category home.
+                  if (screenSizeOf(context) == ScreenSize.expanded) {
+                    return GridView.builder(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 96),
+                      gridDelegate:
+                          const SliverGridDelegateWithMaxCrossAxisExtent(
+                            maxCrossAxisExtent: 300,
+                            mainAxisExtent: 168,
+                            mainAxisSpacing: 12,
+                            crossAxisSpacing: 12,
+                          ),
+                      itemCount: items.length,
+                      itemBuilder: (context, i) {
+                        final p = items[i];
+                        return _ProductCard(
+                          name: p.name,
+                          detail: [
+                            if (p.model != null) p.model!,
+                            p.unit,
+                          ].join(' · '),
+                          price: p.retailPrice,
+                          belowMargin: warned.contains(p.id),
+                          hasSuggestion: suggested.contains(p.id),
+                          manual:
+                              display.showOverrideIcon &&
+                              p.retailIsOverride == 1,
+                          selecting: _selecting,
+                          selected: _selected.contains(p.id),
+                          onTap: _selecting
+                              ? () => _toggle(p.id!)
+                              : () => context.push('/produk/${p.id}'),
+                          onLongPress: _selecting
+                              ? null
+                              : () => _startSelecting(p.id),
+                        );
+                      },
                     );
                   }
                   return ListView.separated(
@@ -342,6 +438,102 @@ class _ProductListScreenState extends ConsumerState<ProductListScreen> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One product as a card (large tablets).
+class _ProductCard extends StatelessWidget {
+  const _ProductCard({
+    required this.name,
+    required this.detail,
+    required this.price,
+    required this.belowMargin,
+    required this.hasSuggestion,
+    required this.manual,
+    required this.selecting,
+    required this.selected,
+    required this.onTap,
+    required this.onLongPress,
+  });
+
+  final String name;
+  final String detail;
+  final int? price;
+  final bool belowMargin;
+  final bool hasSuggestion;
+  final bool manual;
+  final bool selecting;
+  final bool selected;
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      shape: selected
+          ? RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+              side: const BorderSide(color: AppColors.navy, width: 1.5),
+            )
+          : null,
+      child: InkWell(
+        onTap: onTap,
+        onLongPress: onLongPress,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  if (belowMargin)
+                    const StatusBadge('Margin rendah', color: AppColors.warn)
+                  else if (price == null)
+                    const StatusBadge('Tanpa harga', color: AppColors.attention)
+                  else
+                    const StatusBadge('Aman', color: AppColors.ok),
+                  const Spacer(),
+                  if (hasSuggestion)
+                    const Icon(
+                      Icons.price_change_outlined,
+                      size: 18,
+                      color: AppColors.attention,
+                      semanticLabel: 'Ada saran harga',
+                    ),
+                  if (manual)
+                    const Padding(
+                      padding: EdgeInsets.only(left: 6),
+                      child: Icon(Icons.edit, size: 16),
+                    ),
+                  if (selecting)
+                    Checkbox(value: selected, onChanged: (_) => onTap()),
+                ],
+              ),
+              const Spacer(),
+              Text(
+                name,
+                style: text.titleMedium,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              Text(
+                detail,
+                style: text.bodySmall?.copyWith(color: AppColors.muted),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                price == null ? '-' : formatRupiah(price!),
+                style: text.titleLarge?.copyWith(color: AppColors.navy),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -473,8 +665,13 @@ class _CategoryDrawer extends ConsumerWidget {
 }
 
 /// "Cadangan terakhir N hari lalu": shown when a backup is overdue.
-class _BackupBanner extends ConsumerWidget {
-  const _BackupBanner();
+class BackupBanner extends ConsumerWidget {
+  const BackupBanner({
+    super.key,
+    this.margin = const EdgeInsets.fromLTRB(16, 8, 16, 0),
+  });
+
+  final EdgeInsets margin;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -494,7 +691,7 @@ class _BackupBanner extends ConsumerWidget {
     final scheme = Theme.of(context).colorScheme;
     final last = status.lastBackup;
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      margin: margin,
       padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
       decoration: BoxDecoration(
         color: scheme.errorContainer,

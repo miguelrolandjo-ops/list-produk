@@ -252,23 +252,26 @@ void main() {
       final id = await add(tester, 'Kabel', newPrice: 12000);
       await show(tester, '/produk/$id');
 
-      // First click: only asks.
+      // First click: only asks, in a popup.
       await tester.tap(find.text('Ubah ke Rp 20.000'));
-      await tester.pump();
+      await frames(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text('Ubah harga jual?'), findsOneWidget);
       expect(find.text('Ubah harga jual dari Rp 15.000 ke Rp 20.000?'), findsOneWidget);
       expect(find.text('Ya, ubah'), findsOneWidget);
       expect(find.text('Batal'), findsOneWidget);
       expect(await retailOf(tester, id), 15000); // nothing changed yet
 
-      // Batal goes back to the first step.
+      // Batal closes the popup; the card is unchanged.
       await tester.tap(find.text('Batal'));
-      await tester.pump();
+      await frames(tester);
+      expect(find.byType(AlertDialog), findsNothing);
       expect(find.text('Ubah ke Rp 20.000'), findsOneWidget);
       expect(await retailOf(tester, id), 15000);
 
       // Second click: confirms.
       await tester.tap(find.text('Ubah ke Rp 20.000'));
-      await tester.pump();
+      await frames(tester);
       await tester.tap(find.text('Ya, ubah'));
       await settle(tester);
       await frames(tester);
@@ -331,7 +334,7 @@ void main() {
 
       expect(find.text('Ubah ke Rp 15.000'), findsOneWidget);
       await tester.tap(find.text('Ubah ke Rp 15.000'));
-      await tester.pump();
+      await frames(tester);
       await tester.tap(find.text('Ya, ubah'));
       await settle(tester);
       await frames(tester);

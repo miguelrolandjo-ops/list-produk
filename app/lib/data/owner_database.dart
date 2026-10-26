@@ -13,7 +13,7 @@ class OwnerDatabase extends _$OwnerDatabase {
   // Bump this and add an onUpgrade step for every schema change.
   // Real data lives on the owner's phone, so reinstalling is never an option.
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -21,6 +21,7 @@ class OwnerDatabase extends _$OwnerDatabase {
     // launches, so it can't overwrite anything the owner has edited.
     onCreate: (m) async {
       await m.createAll();
+      await ensureCategoryEmojiColumn();
       await _seedDefaults();
     },
     onUpgrade: (m, from, to) async {
@@ -68,8 +69,21 @@ class OwnerDatabase extends _$OwnerDatabase {
           'ALTER TABLE products ADD COLUMN ignored_recommendation INTEGER',
         );
       }
+      if (from < 6) {
+        // An emoji per category for the category cards on the home screen.
+        await ensureCategoryEmojiColumn();
+      }
     },
   );
+
+  /// Adds categories.emoji if it isn't there. Checked rather than assumed, so
+  /// a database is right whether or not the generated code already has the
+  /// column (run build_runner after pulling this change).
+  Future<void> ensureCategoryEmojiColumn() async {
+    final cols = await customSelect('PRAGMA table_info(categories)').get();
+    if (cols.any((c) => c.read<String>('name') == 'emoji')) return;
+    await customStatement('ALTER TABLE categories ADD COLUMN emoji TEXT');
+  }
 
   Future<void> _seedDefaults() async {
     await customStatement('INSERT INTO settings (id) VALUES (1)');
