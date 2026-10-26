@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -178,15 +179,67 @@ class SupabaseServerApi implements ServerApi {
         .eq('id', inviteId),
   );
 
+  @override
+  Future<void> uploadPoPage(String path, Uint8List jpeg) => _call(
+    () => _client.storage
+        .from('po-images')
+        .uploadBinary(
+          path,
+          jpeg,
+          fileOptions: const FileOptions(contentType: 'image/jpeg', upsert: true),
+        ),
+    // A photo upload on a weak signal takes longer than a query.
+    timeout: const Duration(seconds: 90),
+  );
+
+  @override
+  Future<String> submitExtraction(String storeId, List<String> paths) => _call(
+    () async =>
+        await _client.rpc(
+              'submit_extraction',
+              params: {'p_store': storeId, 'p_paths': paths},
+            )
+            as String,
+  );
+
+  @override
+  Future<ExtractionJob?> extractionJob(String jobId) => _call(() async {
+    final row = await _client
+        .from('extraction_jobs')
+        .select('status, result, last_error')
+        .eq('id', jobId)
+        .maybeSingle();
+    if (row == null) return null;
+    final result = row['result'];
+    return ExtractionJob(
+      status: row['status'] as String,
+      result: result == null ? null : Map<String, dynamic>.from(result as Map),
+      error: row['last_error'] as String?,
+    );
+  });
+
+  @override
+  Future<void> markExtractionFetched(String jobId) => _call(
+    () => _client.rpc('mark_extraction_fetched', params: {'p_job': jobId}),
+  );
+
   static DateTime? _date(Object? v) =>
       v == null ? null : DateTime.parse(v as String);
 
   /// Runs [f] and turns every failure into a [ServerException].
-  Future<T> _call<T>(Future<T> Function() f) async {
+  Future<T> _call<T>(Future<T> Function() f, {Duration? timeout}) async {
     try {
-      return await f().timeout(_timeout);
+      return await f().timeout(timeout ?? _timeout);
     } on ServerException {
       rethrow;
+    } on StorageException catch (e) {
+      final code = e.statusCode ?? '';
+      throw ServerException(
+        code == '401' || code == '403'
+            ? ServerErrorKind.notAllowed
+            : ServerErrorKind.other,
+        e.message,
+      );
     } on AuthRetryableFetchException catch (e) {
       throw ServerException(ServerErrorKind.offline, e.message);
     } on AuthException catch (e) {

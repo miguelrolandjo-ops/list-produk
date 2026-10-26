@@ -60,3 +60,59 @@ offline; the account and team screens then say the server isn't set up.
 5. Owner changes a price; second phone pulls down to refresh: new price.
 6. Owner: Tim > Cabut. Second phone refreshes: "Akses ke toko berakhir",
    catalog deleted, back to the welcome screen.
+
+---
+
+# Milestone 4: PO reading
+
+## 6. Storage bucket (now required)
+
+Dashboard > **Storage** > New bucket: **`po-images`**, **private** (public
+off). The access policies are already in the migration: only the store's owner
+can upload, the worker reads and deletes with the service key.
+
+## 7. The worker on the Ubuntu server
+
+The worker only makes outgoing connections (database and storage), so it needs
+no open port, no domain and no HTTPS.
+
+```bash
+sudo apt install -y golang-go   # any Go 1.21+; it downloads Go 1.27 by itself (go.mod)
+cd worker
+go mod tidy                     # first time: fetches pgx and writes go.sum
+go vet ./... && go test ./...   # database tests skip without TEST_DATABASE_URL
+go build -o worker .
+```
+
+Then follow the steps at the top of `deploy/harga-toko-worker.service`, with
+`.env.example` filled in as `/etc/harga-toko/worker.env`.
+
+Watch it: `journalctl -u harga-toko-worker -f`. "job claimed" and "job done"
+lines appear for every PO.
+
+### Database tests
+
+They need a Postgres you can wipe. Either a local Supabase (`supabase start`
+in the repo root):
+
+```bash
+TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:54322/postgres go test ./...
+```
+
+or any Postgres 15+ (`sudo apt install postgresql`, create an empty database);
+the schema is applied on first use. **Never point it at the real project**: the
+tests empty the tables.
+
+## 8. Check (Milestone 4 "done when")
+
+1. Worker running (`journalctl` shows "worker started").
+2. Owner phone: WhatsApp > long-press a nota photo > Bagikan > Harga Toko.
+   The app opens on Inbox: "Foto baru" goes Antre > Mengunggah > Diproses >
+   Perlu dicek within seconds (the fake extractor answers at once with the
+   sample nota from CV Maju Elektrik).
+3. Tap it, review, Simpan: products saved, and Katalog karyawan goes back to
+   "Terbaru" after a few seconds.
+4. Employee phone, pull to refresh: the new products appear.
+5. Supabase > Storage > po-images is empty again (photos are deleted after
+   reading), and the job row disappears from extraction_jobs on the worker's
+   next daily cleanup.

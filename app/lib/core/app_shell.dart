@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../inbox/inbox_providers.dart';
 import 'providers.dart';
 import 'server_providers.dart';
 import 'ui.dart';
@@ -15,13 +16,8 @@ class _Destination {
 }
 
 const _destinations = [
-  _Destination('/', 'Kategori', Icons.grid_view_outlined, Icons.grid_view_rounded),
-  _Destination(
-    '/produk',
-    'Produk',
-    Icons.inventory_2_outlined,
-    Icons.inventory_2,
-  ),
+  _Destination('/', 'Produk', Icons.grid_view_outlined, Icons.grid_view_rounded),
+  _Destination('/inbox', 'Inbox', Icons.inbox_outlined, Icons.inbox),
   _Destination(
     '/saran-harga',
     'Saran harga',
@@ -30,6 +26,12 @@ const _destinations = [
   ),
   _Destination('/tim', 'Tim', Icons.group_outlined, Icons.group),
   _Destination(
+    '/pengaturan/cadangan',
+    'Cadangan',
+    Icons.backup_outlined,
+    Icons.backup,
+  ),
+  _Destination(
     '/pengaturan',
     'Pengaturan',
     Icons.settings_outlined,
@@ -37,8 +39,15 @@ const _destinations = [
   ),
 ];
 
-/// Phone bottom bar: four places; "Saran harga" stays the bell in the app bar.
-const _phoneDestinations = ['/', '/produk', '/tim', '/pengaturan'];
+/// Phone bottom bar (mockup B): Inbox, Produk, Tim, Atur. "Saran harga" stays
+/// the bell in the app bar, backup is in Settings.
+const _phoneDestinations = ['/', '/inbox', '/tim', '/pengaturan'];
+const _phoneLabels = {
+  '/': 'Produk',
+  '/inbox': 'Inbox',
+  '/tim': 'Tim',
+  '/pengaturan': 'Atur',
+};
 
 /// The owner's frame around every screen. Phones get a bottom navigation bar
 /// on the main screens (and none on detail screens, so they keep their room);
@@ -51,19 +60,21 @@ class OwnerShell extends ConsumerWidget {
 
   /// Which main place [location] belongs to ('/produk/12' → '/produk').
   static String sectionOf(String location) {
-    if (location == '/' || location.startsWith('/kategori/')) return '/';
-    for (final d in _destinations.skip(1)) {
-      if (location == d.path || location.startsWith('${d.path}/')) {
-        return d.path;
-      }
+    if (location.startsWith('/po/')) return '/inbox';
+    // Longest match first, so /pengaturan/cadangan isn't /pengaturan.
+    final paths = [for (final d in _destinations.skip(1)) d.path]
+      ..sort((a, b) => b.length.compareTo(a.length));
+    for (final path in paths) {
+      if (location == path || location.startsWith('$path/')) return path;
     }
-    return '/';
+    return '/'; // categories, product lists and details are all "Produk"
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final size = screenSizeOf(context);
     final section = sectionOf(location);
+    final reviews = ref.watch(needsReviewCountProvider);
     if (size == ScreenSize.compact) {
       final isTop = _phoneDestinations.contains(location);
       return Scaffold(
@@ -74,7 +85,11 @@ class OwnerShell extends ConsumerWidget {
                 onDestinationSelected: (i) => context.go(_phoneDestinations[i]),
                 destinations: [
                   for (final path in _phoneDestinations)
-                    _navBarItem(_destinations.firstWhere((d) => d.path == path)),
+                    _navBarItem(
+                      _destinations.firstWhere((d) => d.path == path),
+                      label: _phoneLabels[path]!,
+                      badge: path == '/inbox' && reviews > 0 ? '$reviews' : null,
+                    ),
                 ],
               )
             : null,
@@ -102,10 +117,22 @@ class OwnerShell extends ConsumerWidget {
     );
   }
 
-  NavigationDestination _navBarItem(_Destination d) => NavigationDestination(
-    icon: Icon(d.icon),
-    selectedIcon: Icon(d.selectedIcon),
-    label: d.label,
+  NavigationDestination _navBarItem(
+    _Destination d, {
+    required String label,
+    String? badge,
+  }) => NavigationDestination(
+    icon: Badge(
+      isLabelVisible: badge != null,
+      label: Text(badge ?? ''),
+      child: Icon(d.icon),
+    ),
+    selectedIcon: Badge(
+      isLabelVisible: badge != null,
+      label: Text(badge ?? ''),
+      child: Icon(d.selectedIcon),
+    ),
+    label: label,
   );
 }
 
@@ -124,6 +151,7 @@ class _Sidebar extends ConsumerWidget {
             .length;
     final unsent = ref.watch(unsentCountProvider).value;
     final link = ref.watch(ownerLinkProvider).value;
+    final reviews = ref.watch(needsReviewCountProvider);
 
     return Container(
       width: wide ? 272 : 224,
@@ -178,6 +206,7 @@ class _Sidebar extends ConsumerWidget {
                         destination: d,
                         selected: section == d.path,
                         badge: switch (d.path) {
+                          '/inbox' when reviews > 0 => '$reviews',
                           '/saran-harga' when urgent > 0 => '$urgent',
                           '/pengaturan' when (unsent ?? 0) > 0 => '$unsent',
                           _ => null,
@@ -189,9 +218,9 @@ class _Sidebar extends ConsumerWidget {
                 const Divider(),
                 const SizedBox(height: 12),
                 _SideLink(
-                  icon: Icons.backup_outlined,
-                  label: 'Cadangkan data',
-                  onTap: () => context.go('/pengaturan/cadangan'),
+                  icon: Icons.inventory_2_outlined,
+                  label: 'Semua produk',
+                  onTap: () => context.go('/produk'),
                 ),
                 _SideLink(
                   icon: Icons.storefront_outlined,

@@ -14,6 +14,9 @@ import 'core/router.dart';
 import 'core/server_config.dart';
 import 'core/server_providers.dart';
 import 'core/ui.dart';
+import 'inbox/inbox_providers.dart';
+import 'inbox/po_intake_service.dart';
+import 'inbox/share_intake.dart';
 import 'onboarding/shop_profile.dart';
 
 Future<void> main() async {
@@ -51,18 +54,67 @@ Future<void> main() async {
   );
 }
 
-class App extends ConsumerWidget {
+class App extends ConsumerStatefulWidget {
   const App({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // The owner's phone publishes to the employee catalog in the background.
+  ConsumerState<App> createState() => _AppState();
+}
+
+class _AppState extends ConsumerState<App> {
+  final _messenger = GlobalKey<ScaffoldMessengerState>();
+  final _share = ShareIntake();
+
+  @override
+  void initState() {
+    super.initState();
+    _share.listen(_takeShared);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _takeShared());
+  }
+
+  /// Photos shared from WhatsApp and other apps become a PO in the Inbox.
+  /// Only on the owner's phone; elsewhere they stay with Android until then.
+  Future<void> _takeShared() async {
+    if (ref.read(appModeProvider) != AppMode.owner) return;
+    final paths = await _share.take();
+    if (paths.isEmpty) return;
+    try {
+      await ref.read(poIntakeServiceProvider).create(paths, PoSource.share);
+      ref.read(inboxRunnerProvider).kick();
+      ref.read(routerProvider).go('/inbox');
+      _messenger.currentState?.showSnackBar(
+        SnackBar(
+          content: Text(
+            paths.length == 1
+                ? 'Foto PO diterima'
+                : 'PO dengan ${paths.length} halaman diterima',
+          ),
+        ),
+      );
+    } on Object catch (e) {
+      _messenger.currentState?.showSnackBar(
+        SnackBar(content: Text('Foto tidak bisa disimpan: $e')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // The owner's phone publishes to the employee catalog and moves PO photos
+    // along in the background.
     if (ref.watch(appModeProvider) == AppMode.owner) {
       ref.watch(autoPublisherProvider);
+      if (ref.watch(serverApiProvider) != null) ref.watch(inboxRunnerProvider);
     }
+    // Becoming the owner (after onboarding or restore) picks up a share that
+    // arrived before.
+    ref.listen(appModeProvider, (_, mode) {
+      if (mode == AppMode.owner) _takeShared();
+    });
     return MaterialApp.router(
       title: 'Harga Toko',
       theme: buildAppTheme(),
+      scaffoldMessengerKey: _messenger,
       routerConfig: ref.watch(routerProvider),
     );
   }

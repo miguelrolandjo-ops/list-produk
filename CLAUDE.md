@@ -80,9 +80,13 @@ Server:
 
 ## Current status
 
-Current milestone: 3 (server and employees), built but not yet verified on phones;
-see `docs/server-setup.md` for the Supabase Cloud steps and the "done when" check.
-Milestones 1 and 2 are verified done.
+Current milestone: 4 (PO import with fake data), built but not yet verified
+on phones; see `docs/server-setup.md` sections 6 to 8. Milestones 1 to 3 are
+verified done.
+
+Milestone 4 pieces: Go worker (`worker/`: queue, storage, job runner; tested
+against Postgres), Inbox (`lib/inbox/`), camera/gallery via image_picker,
+share-from-WhatsApp handled natively in `MainActivity.kt` (no plugin).
 
 Also added with Milestone 3: first-launch screen (create shop / restore / join),
 onboarding by shop type with starter categories and emoji (`lib/onboarding/`),

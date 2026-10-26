@@ -6,6 +6,8 @@
 /// PO queue. Supplier data never goes through this interface.
 library;
 
+import 'dart:typed_data';
+
 class ServerUser {
   const ServerUser({required this.id, this.email, required this.isAnonymous});
 
@@ -144,6 +146,18 @@ class StoreInvite {
   final DateTime expiresAt;
 }
 
+/// One PO reading job on the server, as the owner's phone sees it.
+class ExtractionJob {
+  const ExtractionJob({required this.status, this.result, this.error});
+
+  /// 'pending', 'running', 'done' or 'failed'.
+  final String status;
+
+  /// The extraction JSON (build guide section 9), when done.
+  final Map<String, dynamic>? result;
+  final String? error;
+}
+
 abstract class ServerApi {
   ServerUser? get currentUser;
 
@@ -189,4 +203,18 @@ abstract class ServerApi {
   /// Invite codes that can still be used.
   Future<List<StoreInvite>> activeInvites(String storeId);
   Future<void> revokeInvite(String inviteId);
+
+  /// Uploads one PO page to the private 'po-images' bucket at [path]
+  /// ({store_id}/{po_id}/{page_no}.jpg). Replaces an earlier upload.
+  Future<void> uploadPoPage(String path, Uint8List jpeg);
+
+  /// submit_extraction(): queues uploaded pages for reading. Returns the job id.
+  Future<String> submitExtraction(String storeId, List<String> paths);
+
+  /// The job's state, or null if the server no longer has it.
+  Future<ExtractionJob?> extractionJob(String jobId);
+
+  /// mark_extraction_fetched(): the result is saved on the phone, so the
+  /// server can delete it.
+  Future<void> markExtractionFetched(String jobId);
 }

@@ -36,8 +36,11 @@ void main() {
   test('shell sections', () {
     expect(OwnerShell.sectionOf('/'), '/');
     expect(OwnerShell.sectionOf('/kategori/x'), '/');
-    expect(OwnerShell.sectionOf('/produk/abc/ubah'), '/produk');
+    expect(OwnerShell.sectionOf('/produk/abc/ubah'), '/');
     expect(OwnerShell.sectionOf('/pengaturan/akun'), '/pengaturan');
+    expect(OwnerShell.sectionOf('/pengaturan/cadangan'), '/pengaturan/cadangan');
     expect(OwnerShell.sectionOf('/tim'), '/tim');
+    expect(OwnerShell.sectionOf('/inbox'), '/inbox');
+    expect(OwnerShell.sectionOf('/po/abc/review'), '/inbox');
   });
 }

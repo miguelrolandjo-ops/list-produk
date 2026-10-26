@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../backup/backup_screen.dart';
 import '../catalog/employee_catalog_repository.dart' show noCategoryFilter;
 import '../catalog/employee_home_screen.dart';
+import '../inbox/inbox_screen.dart';
 import '../onboarding/onboarding_screen.dart';
 import '../products/add_product_screen.dart';
 import '../products/category_home_screen.dart';
@@ -122,6 +123,7 @@ final routerProvider = Provider<GoRouter>((ref) {
               ),
             ],
           ),
+          GoRoute(path: '/inbox', builder: (_, _) => const InboxScreen()),
           GoRoute(path: '/tambah', builder: (_, _) => const AddProductScreen()),
           GoRoute(
             path: '/saran-harga',

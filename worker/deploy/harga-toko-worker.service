@@ -1,0 +1,27 @@
+# systemd unit for the extraction worker on the Ubuntu server.
+#   sudo useradd --system --no-create-home harga-toko
+#   sudo install -m 755 worker /usr/local/bin/harga-toko-worker
+#   sudo install -m 600 -o harga-toko .env /etc/harga-toko/worker.env
+#   sudo cp deploy/harga-toko-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now harga-toko-worker
+#   journalctl -u harga-toko-worker -f
+[Unit]
+Description=Harga Toko PO extraction worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=harga-toko
+EnvironmentFile=/etc/harga-toko/worker.env
+ExecStart=/usr/local/bin/harga-toko-worker
+Restart=always
+RestartSec=5
+# Stopping puts a job in progress back in the queue (SIGTERM is handled).
+TimeoutStopSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

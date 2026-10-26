@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter_application_1/core/server_api.dart';
 
@@ -218,4 +219,64 @@ class FakeServerApi implements ServerApi {
 
   @override
   Future<void> revokeInvite(String inviteId) async {}
+
+  // ------------------------------------------------------------ PO reading
+
+  /// Uploaded objects in 'po-images', by path.
+  final uploads = <String, Uint8List>{};
+
+  /// Jobs by id: what the worker would have written.
+  final jobs = <String, ExtractionJob>{};
+  final jobPaths = <String, List<String>>{};
+  final fetched = <String>{};
+
+  /// Fail uploads after this many succeeded (a signal lost mid-PO).
+  int? goOfflineAfterUploads;
+
+  @override
+  Future<void> uploadPoPage(String path, Uint8List jpeg) async {
+    _check();
+    if (goOfflineAfterUploads != null &&
+        uploads.length >= goOfflineAfterUploads!) {
+      offline = true;
+      _check();
+    }
+    final store = path.split('/').first;
+    if (user == null || owners[store] != user!.id) {
+      throw const ServerException(ServerErrorKind.notAllowed);
+    }
+    uploads[path] = jpeg;
+  }
+
+  @override
+  Future<String> submitExtraction(String storeId, List<String> paths) async {
+    _check();
+    if (user == null || owners[storeId] != user!.id) {
+      throw const ServerException(ServerErrorKind.notAllowed);
+    }
+    if (paths.isEmpty) throw const ServerException(ServerErrorKind.other);
+    final id = 'job-${_ids++}';
+    jobs[id] = const ExtractionJob(status: 'pending');
+    jobPaths[id] = paths;
+    return id;
+  }
+
+  /// What the Go worker does: store a result (or a failure).
+  void finishJob(String id, {Map<String, dynamic>? result, String? error}) {
+    jobs[id] = result != null
+        ? ExtractionJob(status: 'done', result: result)
+        : ExtractionJob(status: 'failed', error: error ?? 'gagal');
+  }
+
+  @override
+  Future<ExtractionJob?> extractionJob(String jobId) async {
+    _check();
+    return jobs[jobId];
+  }
+
+  @override
+  Future<void> markExtractionFetched(String jobId) async {
+    _check();
+    fetched.add(jobId);
+  }
 }
