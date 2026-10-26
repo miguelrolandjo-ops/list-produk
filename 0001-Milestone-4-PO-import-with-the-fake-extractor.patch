@@ -1,0 +1,3689 @@
+From b0bdb0170039cc7c2b11c6114de555faa34ae6f9 Mon Sep 17 00:00:00 2001
+From: Claude <claude@anthropic.com>
+Date: Mon, 26 Oct 2026 13:26:56 +0000
+Subject: [PATCH] Milestone 4: PO import with the fake extractor
+
+Worker (Go):
+- queue: claim with FOR UPDATE SKIP LOCKED in one UPDATE, attempts counted at
+  claim, max 3 tries, stale-job recovery, daily cleanup of fetched/old jobs
+- storage: download/delete in po-images with the service key (new sb_secret_
+  and legacy JWT keys); a missing page fails the job at once
+- runner: validate model output before storing, delete pages when done or
+  failed for good, put the job back on shutdown without using a try
+- tests against Postgres incl. the phone round trip through submit_extraction
+  and mark_extraction_fetched; systemd unit and env example
+
+App:
+- Inbox (mockup B): camera (multi-page), gallery (multi-select), statuses
+  Antre/Mengunggah/Diproses/Perlu dicek/Tersimpan/Gagal, retry, delete
+- upload to po-images/{store}/{po}/{n}.jpg, submit, poll, import + matching,
+  mark fetched; offline-safe, resumes on next run
+- share from WhatsApp handled in MainActivity.kt (no plugin), images shrunk
+  to 1600 px and turned upright
+- Inbox in the bottom bar and sidebar with a 'Perlu dicek' badge
+---
+ CLAUDE.md                                     |  10 +-
+ app/android/app/src/main/AndroidManifest.xml  |  12 +
+ .../flutter_application_1/MainActivity.kt     | 154 ++++++
+ app/lib/core/app_shell.dart                   |  75 ++-
+ app/lib/core/router.dart                      |   2 +
+ app/lib/core/server_api.dart                  |  28 +
+ app/lib/core/supabase_server_api.dart         |  57 +-
+ app/lib/inbox/inbox_providers.dart            | 136 +++++
+ app/lib/inbox/inbox_runner.dart               |  78 +++
+ app/lib/inbox/inbox_screen.dart               | 523 ++++++++++++++++++
+ app/lib/inbox/po_intake_service.dart          | 110 ++++
+ app/lib/inbox/po_sync_service.dart            | 257 +++++++++
+ app/lib/inbox/share_intake.dart               |  30 +
+ app/lib/main.dart                             |  58 +-
+ app/pubspec.yaml                              |   1 +
+ app/test/core/router_redirect_test.dart       |   5 +-
+ app/test/inbox/po_sync_service_test.dart      | 195 +++++++
+ app/test/support/fake_server_api.dart         |  61 ++
+ docs/server-setup.md                          |  56 ++
+ worker/.env.example                           |  19 +
+ worker/.gitignore                             |   3 +
+ worker/deploy/harga-toko-worker.service       |  27 +
+ worker/go.mod                                 |   2 +
+ worker/internal/testdb/testdb.go              |  99 ++++
+ worker/job/runner.go                          | 165 ++++++
+ worker/main.go                                | 222 ++++++++
+ worker/queue/queue.go                         | 157 ++++++
+ worker/queue/queue_test.go                    | 469 ++++++++++++++++
+ worker/storage/storage.go                     | 126 +++++
+ worker/storage/storage_test.go                |  91 +++
+ 30 files changed, 3196 insertions(+), 32 deletions(-)
+ create mode 100644 app/lib/inbox/inbox_providers.dart
+ create mode 100644 app/lib/inbox/inbox_runner.dart
+ create mode 100644 app/lib/inbox/inbox_screen.dart
+ create mode 100644 app/lib/inbox/po_intake_service.dart
+ create mode 100644 app/lib/inbox/po_sync_service.dart
+ create mode 100644 app/lib/inbox/share_intake.dart
+ create mode 100644 app/test/inbox/po_sync_service_test.dart
+ create mode 100644 worker/.env.example
+ create mode 100644 worker/.gitignore
+ create mode 100644 worker/deploy/harga-toko-worker.service
+ create mode 100644 worker/internal/testdb/testdb.go
+ create mode 100644 worker/job/runner.go
+ create mode 100644 worker/main.go
+ create mode 100644 worker/queue/queue.go
+ create mode 100644 worker/queue/queue_test.go
+ create mode 100644 worker/storage/storage.go
+ create mode 100644 worker/storage/storage_test.go
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index ee19605..19a216e 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -80,9 +80,13 @@ Server:
+ 
+ ## Current status
+ 
+-Current milestone: 3 (server and employees), built but not yet verified on phones;
+-see `docs/server-setup.md` for the Supabase Cloud steps and the "done when" check.
+-Milestones 1 and 2 are verified done.
++Current milestone: 4 (PO import with fake data), built but not yet verified
++on phones; see `docs/server-setup.md` sections 6 to 8. Milestones 1 to 3 are
++verified done.
++
++Milestone 4 pieces: Go worker (`worker/`: queue, storage, job runner; tested
++against Postgres), Inbox (`lib/inbox/`), camera/gallery via image_picker,
++share-from-WhatsApp handled natively in `MainActivity.kt` (no plugin).
+ 
+ Also added with Milestone 3: first-launch screen (create shop / restore / join),
+ onboarding by shop type with starter categories and emoji (`lib/onboarding/`),
+diff --git a/app/android/app/src/main/AndroidManifest.xml b/app/android/app/src/main/AndroidManifest.xml
+index 9d562a7..c6c7077 100644
+--- a/app/android/app/src/main/AndroidManifest.xml
++++ b/app/android/app/src/main/AndroidManifest.xml
+@@ -28,6 +28,18 @@
+                 <action android:name="android.intent.action.MAIN"/>
+                 <category android:name="android.intent.category.LAUNCHER"/>
+             </intent-filter>
++            <!-- "Bagikan > Harga Toko" from WhatsApp, Gallery, Files: PO photos.
++                 Handled in MainActivity.kt (no plugin). -->
++            <intent-filter>
++                <action android:name="android.intent.action.SEND"/>
++                <category android:name="android.intent.category.DEFAULT"/>
++                <data android:mimeType="image/*"/>
++            </intent-filter>
++            <intent-filter>
++                <action android:name="android.intent.action.SEND_MULTIPLE"/>
++                <category android:name="android.intent.category.DEFAULT"/>
++                <data android:mimeType="image/*"/>
++            </intent-filter>
+         </activity>
+         <!-- Don't delete the meta-data below.
+              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+diff --git a/app/android/app/src/main/kotlin/com/example/flutter_application_1/MainActivity.kt b/app/android/app/src/main/kotlin/com/example/flutter_application_1/MainActivity.kt
+index 6e863f6..34fe13e 100644
+--- a/app/android/app/src/main/kotlin/com/example/flutter_application_1/MainActivity.kt
++++ b/app/android/app/src/main/kotlin/com/example/flutter_application_1/MainActivity.kt
+@@ -2,6 +2,11 @@ package com.example.flutter_application_1
+ 
+ import android.content.ContentUris
+ import android.content.ContentValues
++import android.content.Intent
++import android.graphics.Bitmap
++import android.graphics.BitmapFactory
++import android.graphics.Matrix
++import android.media.ExifInterface
+ import android.net.Uri
+ import android.os.Build
+ import android.os.Environment
+@@ -15,6 +20,15 @@ import java.io.IOException
+ import java.util.concurrent.Executors
+ 
+ /**
++ * Two small native channels, our own code on purpose (see the end of this
++ * comment):
++ *
++ * Shared PO photos ("Bagikan > Harga Toko" from WhatsApp and others), channel
++ * harga_toko/share. Each shared image is shrunk to [SHARE_MAX_SIDE] px on its
++ * long side, turned upright, and saved as a JPEG in the cache. Dart takes the
++ * files with "takeShared"; while the app runs, "sharedAvailable" tells it new
++ * ones arrived.
++ *
+  * Backups in the public Download folder, through MediaStore (Android 10+).
+  *
+  * MediaStore needs no storage permission and no folder prompt for files this
+@@ -28,10 +42,145 @@ import java.util.concurrent.Executors
+ class MainActivity : FlutterActivity() {
+     private val worker = Executors.newSingleThreadExecutor()
+ 
++    /** Shrunk shared photos Dart hasn't taken yet. Touched only on [worker]. */
++    private val pendingShared = mutableListOf<String>()
++    private var shareChannel: MethodChannel? = null
++
+     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+         super.configureFlutterEngine(flutterEngine)
+         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+             .setMethodCallHandler { call, result -> handle(call, result) }
++        shareChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SHARE_CHANNEL)
++            .also { channel ->
++                channel.setMethodCallHandler { call, result ->
++                    if (call.method != "takeShared") {
++                        result.notImplemented()
++                        return@setMethodCallHandler
++                    }
++                    // Same single thread as the shrinking, so a share that is
++                    // still being processed is included.
++                    worker.execute {
++                        val files = pendingShared.toList()
++                        pendingShared.clear()
++                        runOnUiThread { result.success(files) }
++                    }
++                }
++            }
++        receiveShare(intent)
++    }
++
++    override fun onNewIntent(intent: Intent) {
++        super.onNewIntent(intent)
++        setIntent(intent)
++        receiveShare(intent)
++    }
++
++    /** Shrinks the images of a share intent and keeps them for Dart. */
++    private fun receiveShare(intent: Intent?) {
++        val uris = sharedImageUris(intent)
++        if (uris.isEmpty()) return
++        // Consume it, so turning the phone (activity recreated) doesn't
++        // import the same photos twice.
++        intent?.action = null
++        worker.execute {
++            val files = uris.mapIndexedNotNull { i, uri ->
++                try {
++                    shrinkImage(uri, i)
++                } catch (e: Exception) {
++                    null // not a readable image: skip it, keep the others
++                }
++            }
++            pendingShared.addAll(files)
++            if (files.isNotEmpty()) {
++                runOnUiThread { shareChannel?.invokeMethod("sharedAvailable", files.size) }
++            }
++        }
++    }
++
++    private fun sharedImageUris(intent: Intent?): List<Uri> {
++        if (intent == null) return emptyList()
++        val type = intent.type ?: ""
++        if (!type.startsWith("image/")) return emptyList()
++        val uris = mutableListOf<Uri>()
++        when (intent.action) {
++            Intent.ACTION_SEND -> streamExtra(intent)?.let { uris.add(it) }
++            Intent.ACTION_SEND_MULTIPLE -> uris.addAll(streamListExtra(intent))
++            else -> return emptyList()
++        }
++        // Some apps only fill ClipData.
++        if (uris.isEmpty()) {
++            intent.clipData?.let { clip ->
++                for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { uris.add(it) }
++            }
++        }
++        return uris.distinct()
++    }
++
++    private fun streamExtra(intent: Intent): Uri? =
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
++            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
++        } else {
++            @Suppress("DEPRECATION")
++            intent.getParcelableExtra(Intent.EXTRA_STREAM)
++        }
++
++    private fun streamListExtra(intent: Intent): List<Uri> =
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
++            intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
++        } else {
++            @Suppress("DEPRECATION")
++            intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
++        } ?: emptyList()
++
++    /**
++     * Decodes [uri] at a reduced size (never the full photo in memory), turns
++     * it upright from its EXIF orientation, scales the long side down to
++     * [SHARE_MAX_SIDE] and writes a JPEG to the cache. Returns the file path.
++     */
++    private fun shrinkImage(uri: Uri, index: Int): String {
++        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
++        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
++        val longSide = maxOf(bounds.outWidth, bounds.outHeight)
++        if (longSide <= 0) throw IOException("Bukan gambar")
++
++        var sample = 1
++        while (longSide / (sample * 2) >= SHARE_MAX_SIDE) sample *= 2
++        val decoded = contentResolver.openInputStream(uri)?.use {
++            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
++        } ?: throw IOException("Gambar tidak bisa dibaca")
++
++        val matrix = Matrix()
++        val rotation = exifRotation(uri)
++        if (rotation != 0) matrix.postRotate(rotation.toFloat())
++        val scale = SHARE_MAX_SIDE.toFloat() / maxOf(decoded.width, decoded.height)
++        if (scale < 1f) matrix.postScale(scale, scale)
++        val upright = if (matrix.isIdentity) decoded else
++            Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
++
++        val dir = File(cacheDir, "shared").apply { mkdirs() }
++        val file = File(dir, "${System.currentTimeMillis()}_${index + 1}.jpg")
++        file.outputStream().use { upright.compress(Bitmap.CompressFormat.JPEG, SHARE_JPEG_QUALITY, it) }
++        if (upright !== decoded) upright.recycle()
++        decoded.recycle()
++        return file.absolutePath
++    }
++
++    private fun exifRotation(uri: Uri): Int {
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return 0
++        return try {
++            contentResolver.openInputStream(uri)?.use { stream ->
++                when (ExifInterface(stream).getAttributeInt(
++                    ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL,
++                )) {
++                    ExifInterface.ORIENTATION_ROTATE_90 -> 90
++                    ExifInterface.ORIENTATION_ROTATE_180 -> 180
++                    ExifInterface.ORIENTATION_ROTATE_270 -> 270
++                    else -> 0
++                }
++            } ?: 0
++        } catch (e: Exception) {
++            0
++        }
+     }
+ 
+     override fun onDestroy() {
+@@ -150,5 +299,10 @@ class MainActivity : FlutterActivity() {
+ 
+     companion object {
+         const val CHANNEL = "harga_toko/backup_files"
++        const val SHARE_CHANNEL = "harga_toko/share"
++
++        /** Same as the app's camera/gallery setting (poMaxSide in Dart). */
++        const val SHARE_MAX_SIDE = 1600
++        const val SHARE_JPEG_QUALITY = 82
+     }
+ }
+diff --git a/app/lib/core/app_shell.dart b/app/lib/core/app_shell.dart
+index d9fca9c..a4f3177 100644
+--- a/app/lib/core/app_shell.dart
++++ b/app/lib/core/app_shell.dart
+@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
+ import 'package:flutter_riverpod/flutter_riverpod.dart';
+ import 'package:go_router/go_router.dart';
+ 
++import '../inbox/inbox_providers.dart';
+ import 'providers.dart';
+ import 'server_providers.dart';
+ import 'ui.dart';
+@@ -15,13 +16,8 @@ class _Destination {
+ }
+ 
+ const _destinations = [
+-  _Destination('/', 'Kategori', Icons.grid_view_outlined, Icons.grid_view_rounded),
+-  _Destination(
+-    '/produk',
+-    'Produk',
+-    Icons.inventory_2_outlined,
+-    Icons.inventory_2,
+-  ),
++  _Destination('/', 'Produk', Icons.grid_view_outlined, Icons.grid_view_rounded),
++  _Destination('/inbox', 'Inbox', Icons.inbox_outlined, Icons.inbox),
+   _Destination(
+     '/saran-harga',
+     'Saran harga',
+@@ -29,6 +25,12 @@ const _destinations = [
+     Icons.notifications,
+   ),
+   _Destination('/tim', 'Tim', Icons.group_outlined, Icons.group),
++  _Destination(
++    '/pengaturan/cadangan',
++    'Cadangan',
++    Icons.backup_outlined,
++    Icons.backup,
++  ),
+   _Destination(
+     '/pengaturan',
+     'Pengaturan',
+@@ -37,8 +39,15 @@ const _destinations = [
+   ),
+ ];
+ 
+-/// Phone bottom bar: four places; "Saran harga" stays the bell in the app bar.
+-const _phoneDestinations = ['/', '/produk', '/tim', '/pengaturan'];
++/// Phone bottom bar (mockup B): Inbox, Produk, Tim, Atur. "Saran harga" stays
++/// the bell in the app bar, backup is in Settings.
++const _phoneDestinations = ['/', '/inbox', '/tim', '/pengaturan'];
++const _phoneLabels = {
++  '/': 'Produk',
++  '/inbox': 'Inbox',
++  '/tim': 'Tim',
++  '/pengaturan': 'Atur',
++};
+ 
+ /// The owner's frame around every screen. Phones get a bottom navigation bar
+ /// on the main screens (and none on detail screens, so they keep their room);
+@@ -51,19 +60,21 @@ class OwnerShell extends ConsumerWidget {
+ 
+   /// Which main place [location] belongs to ('/produk/12' → '/produk').
+   static String sectionOf(String location) {
+-    if (location == '/' || location.startsWith('/kategori/')) return '/';
+-    for (final d in _destinations.skip(1)) {
+-      if (location == d.path || location.startsWith('${d.path}/')) {
+-        return d.path;
+-      }
++    if (location.startsWith('/po/')) return '/inbox';
++    // Longest match first, so /pengaturan/cadangan isn't /pengaturan.
++    final paths = [for (final d in _destinations.skip(1)) d.path]
++      ..sort((a, b) => b.length.compareTo(a.length));
++    for (final path in paths) {
++      if (location == path || location.startsWith('$path/')) return path;
+     }
+-    return '/';
++    return '/'; // categories, product lists and details are all "Produk"
+   }
+ 
+   @override
+   Widget build(BuildContext context, WidgetRef ref) {
+     final size = screenSizeOf(context);
+     final section = sectionOf(location);
++    final reviews = ref.watch(needsReviewCountProvider);
+     if (size == ScreenSize.compact) {
+       final isTop = _phoneDestinations.contains(location);
+       return Scaffold(
+@@ -74,7 +85,11 @@ class OwnerShell extends ConsumerWidget {
+                 onDestinationSelected: (i) => context.go(_phoneDestinations[i]),
+                 destinations: [
+                   for (final path in _phoneDestinations)
+-                    _navBarItem(_destinations.firstWhere((d) => d.path == path)),
++                    _navBarItem(
++                      _destinations.firstWhere((d) => d.path == path),
++                      label: _phoneLabels[path]!,
++                      badge: path == '/inbox' && reviews > 0 ? '$reviews' : null,
++                    ),
+                 ],
+               )
+             : null,
+@@ -102,10 +117,22 @@ class OwnerShell extends ConsumerWidget {
+     );
+   }
+ 
+-  NavigationDestination _navBarItem(_Destination d) => NavigationDestination(
+-    icon: Icon(d.icon),
+-    selectedIcon: Icon(d.selectedIcon),
+-    label: d.label,
++  NavigationDestination _navBarItem(
++    _Destination d, {
++    required String label,
++    String? badge,
++  }) => NavigationDestination(
++    icon: Badge(
++      isLabelVisible: badge != null,
++      label: Text(badge ?? ''),
++      child: Icon(d.icon),
++    ),
++    selectedIcon: Badge(
++      isLabelVisible: badge != null,
++      label: Text(badge ?? ''),
++      child: Icon(d.selectedIcon),
++    ),
++    label: label,
+   );
+ }
+ 
+@@ -124,6 +151,7 @@ class _Sidebar extends ConsumerWidget {
+             .length;
+     final unsent = ref.watch(unsentCountProvider).value;
+     final link = ref.watch(ownerLinkProvider).value;
++    final reviews = ref.watch(needsReviewCountProvider);
+ 
+     return Container(
+       width: wide ? 272 : 224,
+@@ -178,6 +206,7 @@ class _Sidebar extends ConsumerWidget {
+                         destination: d,
+                         selected: section == d.path,
+                         badge: switch (d.path) {
++                          '/inbox' when reviews > 0 => '$reviews',
+                           '/saran-harga' when urgent > 0 => '$urgent',
+                           '/pengaturan' when (unsent ?? 0) > 0 => '$unsent',
+                           _ => null,
+@@ -189,9 +218,9 @@ class _Sidebar extends ConsumerWidget {
+                 const Divider(),
+                 const SizedBox(height: 12),
+                 _SideLink(
+-                  icon: Icons.backup_outlined,
+-                  label: 'Cadangkan data',
+-                  onTap: () => context.go('/pengaturan/cadangan'),
++                  icon: Icons.inventory_2_outlined,
++                  label: 'Semua produk',
++                  onTap: () => context.go('/produk'),
+                 ),
+                 _SideLink(
+                   icon: Icons.storefront_outlined,
+diff --git a/app/lib/core/router.dart b/app/lib/core/router.dart
+index dc6d57f..8614302 100644
+--- a/app/lib/core/router.dart
++++ b/app/lib/core/router.dart
+@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
+ import '../backup/backup_screen.dart';
+ import '../catalog/employee_catalog_repository.dart' show noCategoryFilter;
+ import '../catalog/employee_home_screen.dart';
++import '../inbox/inbox_screen.dart';
+ import '../onboarding/onboarding_screen.dart';
+ import '../products/add_product_screen.dart';
+ import '../products/category_home_screen.dart';
+@@ -122,6 +123,7 @@ final routerProvider = Provider<GoRouter>((ref) {
+               ),
+             ],
+           ),
++          GoRoute(path: '/inbox', builder: (_, _) => const InboxScreen()),
+           GoRoute(path: '/tambah', builder: (_, _) => const AddProductScreen()),
+           GoRoute(
+             path: '/saran-harga',
+diff --git a/app/lib/core/server_api.dart b/app/lib/core/server_api.dart
+index 3d005fc..41484e1 100644
+--- a/app/lib/core/server_api.dart
++++ b/app/lib/core/server_api.dart
+@@ -6,6 +6,8 @@
+ /// PO queue. Supplier data never goes through this interface.
+ library;
+ 
++import 'dart:typed_data';
++
+ class ServerUser {
+   const ServerUser({required this.id, this.email, required this.isAnonymous});
+ 
+@@ -144,6 +146,18 @@ class StoreInvite {
+   final DateTime expiresAt;
+ }
+ 
++/// One PO reading job on the server, as the owner's phone sees it.
++class ExtractionJob {
++  const ExtractionJob({required this.status, this.result, this.error});
++
++  /// 'pending', 'running', 'done' or 'failed'.
++  final String status;
++
++  /// The extraction JSON (build guide section 9), when done.
++  final Map<String, dynamic>? result;
++  final String? error;
++}
++
+ abstract class ServerApi {
+   ServerUser? get currentUser;
+ 
+@@ -189,4 +203,18 @@ abstract class ServerApi {
+   /// Invite codes that can still be used.
+   Future<List<StoreInvite>> activeInvites(String storeId);
+   Future<void> revokeInvite(String inviteId);
++
++  /// Uploads one PO page to the private 'po-images' bucket at [path]
++  /// ({store_id}/{po_id}/{page_no}.jpg). Replaces an earlier upload.
++  Future<void> uploadPoPage(String path, Uint8List jpeg);
++
++  /// submit_extraction(): queues uploaded pages for reading. Returns the job id.
++  Future<String> submitExtraction(String storeId, List<String> paths);
++
++  /// The job's state, or null if the server no longer has it.
++  Future<ExtractionJob?> extractionJob(String jobId);
++
++  /// mark_extraction_fetched(): the result is saved on the phone, so the
++  /// server can delete it.
++  Future<void> markExtractionFetched(String jobId);
+ }
+diff --git a/app/lib/core/supabase_server_api.dart b/app/lib/core/supabase_server_api.dart
+index cca6141..1352641 100644
+--- a/app/lib/core/supabase_server_api.dart
++++ b/app/lib/core/supabase_server_api.dart
+@@ -1,5 +1,6 @@
+ import 'dart:async';
+ import 'dart:io';
++import 'dart:typed_data';
+ 
+ import 'package:supabase_flutter/supabase_flutter.dart';
+ 
+@@ -178,15 +179,67 @@ class SupabaseServerApi implements ServerApi {
+         .eq('id', inviteId),
+   );
+ 
++  @override
++  Future<void> uploadPoPage(String path, Uint8List jpeg) => _call(
++    () => _client.storage
++        .from('po-images')
++        .uploadBinary(
++          path,
++          jpeg,
++          fileOptions: const FileOptions(contentType: 'image/jpeg', upsert: true),
++        ),
++    // A photo upload on a weak signal takes longer than a query.
++    timeout: const Duration(seconds: 90),
++  );
++
++  @override
++  Future<String> submitExtraction(String storeId, List<String> paths) => _call(
++    () async =>
++        await _client.rpc(
++              'submit_extraction',
++              params: {'p_store': storeId, 'p_paths': paths},
++            )
++            as String,
++  );
++
++  @override
++  Future<ExtractionJob?> extractionJob(String jobId) => _call(() async {
++    final row = await _client
++        .from('extraction_jobs')
++        .select('status, result, last_error')
++        .eq('id', jobId)
++        .maybeSingle();
++    if (row == null) return null;
++    final result = row['result'];
++    return ExtractionJob(
++      status: row['status'] as String,
++      result: result == null ? null : Map<String, dynamic>.from(result as Map),
++      error: row['last_error'] as String?,
++    );
++  });
++
++  @override
++  Future<void> markExtractionFetched(String jobId) => _call(
++    () => _client.rpc('mark_extraction_fetched', params: {'p_job': jobId}),
++  );
++
+   static DateTime? _date(Object? v) =>
+       v == null ? null : DateTime.parse(v as String);
+ 
+   /// Runs [f] and turns every failure into a [ServerException].
+-  Future<T> _call<T>(Future<T> Function() f) async {
++  Future<T> _call<T>(Future<T> Function() f, {Duration? timeout}) async {
+     try {
+-      return await f().timeout(_timeout);
++      return await f().timeout(timeout ?? _timeout);
+     } on ServerException {
+       rethrow;
++    } on StorageException catch (e) {
++      final code = e.statusCode ?? '';
++      throw ServerException(
++        code == '401' || code == '403'
++            ? ServerErrorKind.notAllowed
++            : ServerErrorKind.other,
++        e.message,
++      );
+     } on AuthRetryableFetchException catch (e) {
+       throw ServerException(ServerErrorKind.offline, e.message);
+     } on AuthException catch (e) {
+diff --git a/app/lib/inbox/inbox_providers.dart b/app/lib/inbox/inbox_providers.dart
+new file mode 100644
+index 0000000..517cdff
+--- /dev/null
++++ b/app/lib/inbox/inbox_providers.dart
+@@ -0,0 +1,136 @@
++import 'dart:convert';
++
++import 'package:drift/drift.dart' show TableUpdateQuery;
++import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:path_provider/path_provider.dart';
++
++import '../core/providers.dart';
++import '../core/server_providers.dart';
++import 'inbox_runner.dart';
++import 'po_intake_service.dart';
++import 'po_sync_service.dart';
++
++final poIntakeServiceProvider = Provider<PoIntakeService>(
++  (ref) => PoIntakeService(
++    ref.watch(ownerDbProvider),
++    getApplicationDocumentsDirectory,
++  ),
++);
++
++final poSyncServiceProvider = Provider<PoSyncService>(
++  (ref) => PoSyncService(
++    ref.watch(ownerDbProvider),
++    ref.watch(serverApiProvider),
++    ref.watch(poImportServiceProvider),
++  ),
++);
++
++/// Runs while the owner side of the app runs (watched in App).
++final inboxRunnerProvider = Provider<InboxRunner>((ref) {
++  final runner = InboxRunner(ref.watch(poSyncServiceProvider))..start();
++  ref.listen(serverUserProvider, (_, _) => runner.kick());
++  ref.listen(ownerStoreIdProvider, (_, _) => runner.kick());
++  ref.onDispose(runner.dispose);
++  return runner;
++});
++
++/// One PO in the Inbox list.
++class InboxItem {
++  const InboxItem({
++    required this.id,
++    required this.status,
++    required this.source,
++    required this.createdAt,
++    required this.pages,
++    this.supplierName,
++    this.firstPage,
++    this.lineCount = 0,
++  });
++
++  final String id;
++
++  /// queued, uploading, processing, needs_review, saved, failed.
++  final String status;
++
++  /// camera, gallery, share, whatsapp.
++  final String source;
++  final DateTime createdAt;
++  final int pages;
++
++  /// The known supplier, else the name printed on the PO (if read).
++  final String? supplierName;
++
++  /// The first photo on this phone, for the thumbnail.
++  final String? firstPage;
++  final int lineCount;
++}
++
++/// Newest first. Updates whenever a PO changes.
++final inboxItemsProvider = StreamProvider<List<InboxItem>>((ref) async* {
++  final db = ref.watch(ownerDbProvider);
++
++  Future<List<InboxItem>> load() async {
++    final rows = await db
++        .customSelect(
++          'SELECT po.id, po.status, po.source, po.created_at, po.raw_result, '
++          's.name AS supplier, '
++          '(SELECT COUNT(*) FROM po_pages pg WHERE pg.po_id = po.id) AS pages, '
++          '(SELECT local_path FROM po_pages pg WHERE pg.po_id = po.id '
++          ' ORDER BY page_no LIMIT 1) AS first_page, '
++          "(SELECT COUNT(*) FROM po_lines l WHERE l.po_id = po.id "
++          " AND l.match_status != 'ignored') AS lines "
++          'FROM purchase_orders po '
++          'LEFT JOIN suppliers s ON s.id = po.supplier_id '
++          'ORDER BY po.created_at DESC',
++        )
++        .get();
++    return [
++      for (final r in rows)
++        InboxItem(
++          id: r.read<String>('id'),
++          status: r.read<String>('status'),
++          source: r.read<String>('source'),
++          createdAt:
++              DateTime.tryParse(r.read<String>('created_at'))?.toLocal() ??
++              DateTime.now(),
++          pages: r.read<int>('pages'),
++          supplierName:
++              r.readNullable<String>('supplier') ??
++              _printedSupplier(r.readNullable<String>('raw_result')),
++          firstPage: r.readNullable<String>('first_page'),
++          lineCount: r.read<int>('lines'),
++        ),
++    ];
++  }
++
++  yield await load();
++  final changes = db.tableUpdates(
++    TableUpdateQuery.onAllTables([
++      db.purchaseOrders,
++      db.poPages,
++      db.poLines,
++      db.suppliers,
++    ]),
++  );
++  await for (final _ in changes) {
++    yield await load();
++  }
++});
++
++String? _printedSupplier(String? raw) {
++  if (raw == null) return null;
++  try {
++    final name = (jsonDecode(raw) as Map)['supplier']?['name'];
++    return name is String && name.trim().isNotEmpty ? name.trim() : null;
++  } on Object {
++    return null;
++  }
++}
++
++/// "Perlu dicek": the badge on the Inbox tab.
++final needsReviewCountProvider = Provider<int>(
++  (ref) =>
++      (ref.watch(inboxItemsProvider).value ?? const [])
++          .where((i) => i.status == 'needs_review')
++          .length,
++);
+diff --git a/app/lib/inbox/inbox_runner.dart b/app/lib/inbox/inbox_runner.dart
+new file mode 100644
+index 0000000..e66f885
+--- /dev/null
++++ b/app/lib/inbox/inbox_runner.dart
+@@ -0,0 +1,78 @@
++import 'dart:async';
++
++import 'package:flutter/widgets.dart';
++
++import 'po_sync_service.dart';
++
++/// Moves POs along without the owner doing anything: right after a photo is
++/// added, when the app comes back to the foreground, and after signing in.
++/// While the server is reading a PO it asks every [pollEvery]; without signal
++/// it tries again every [retryEvery]. Nothing runs while the app is in the
++/// background.
++class InboxRunner with WidgetsBindingObserver {
++  InboxRunner(
++    this._sync, {
++    this.pollEvery = const Duration(seconds: 5),
++    this.retryEvery = const Duration(seconds: 30),
++  });
++
++  final PoSyncService _sync;
++  final Duration pollEvery;
++  final Duration retryEvery;
++
++  Timer? _timer;
++  bool _foreground = true;
++  bool _disposed = false;
++
++  /// Called with the result of every run (the Inbox shows a snackbar when a
++  /// PO is ready for review).
++  void Function(PoSyncResult)? onResult;
++
++  void start() {
++    WidgetsBinding.instance.addObserver(this);
++    kick();
++  }
++
++  /// Run now (new photos, "Coba lagi", signed in, pull to refresh).
++  Future<PoSyncResult?> kick() async {
++    _timer?.cancel();
++    if (_disposed) return null;
++    final result = await _sync.run();
++    if (_disposed) return result;
++    onResult?.call(result);
++    _scheduleAfter(result);
++    return result;
++  }
++
++  void _scheduleAfter(PoSyncResult r) {
++    _timer?.cancel();
++    if (!_foreground) return;
++    final Duration? next;
++    if (r.outcome == PoSyncOutcome.offline) {
++      next = retryEvery;
++    } else if (r.outcome == PoSyncOutcome.done && r.processing > 0) {
++      next = pollEvery;
++    } else if (r.outcome == PoSyncOutcome.done && r.queued > 0) {
++      next = retryEvery; // an upload failed for another reason
++    } else {
++      next = null; // nothing to do, or not connected (signing in kicks)
++    }
++    if (next != null) _timer = Timer(next, kick);
++  }
++
++  @override
++  void didChangeAppLifecycleState(AppLifecycleState state) {
++    _foreground = state == AppLifecycleState.resumed;
++    if (_foreground) {
++      kick();
++    } else {
++      _timer?.cancel();
++    }
++  }
++
++  void dispose() {
++    _disposed = true;
++    WidgetsBinding.instance.removeObserver(this);
++    _timer?.cancel();
++  }
++}
+diff --git a/app/lib/inbox/inbox_screen.dart b/app/lib/inbox/inbox_screen.dart
+new file mode 100644
+index 0000000..646208d
+--- /dev/null
++++ b/app/lib/inbox/inbox_screen.dart
+@@ -0,0 +1,523 @@
++import 'dart:io';
++
++import 'package:flutter/material.dart';
++import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:go_router/go_router.dart';
++import 'package:image_picker/image_picker.dart';
++import 'package:intl/intl.dart';
++
++import '../core/server_providers.dart';
++import '../core/ui.dart';
++import '../products/product_list_screen.dart' show BackupBanner;
++import '../team/owner_account_service.dart';
++import 'inbox_providers.dart';
++import 'po_intake_service.dart';
++
++/// Photos are shrunk to this long side before they are kept or uploaded:
++/// enough to read a nota, and fast on a weak signal.
++const poMaxSide = 1600.0;
++const poJpegQuality = 82;
++
++/// "Inbox PO" (mockup screen B): add PO photos and follow them until they are
++/// reviewed and saved.
++class InboxScreen extends ConsumerStatefulWidget {
++  const InboxScreen({super.key});
++
++  @override
++  ConsumerState<InboxScreen> createState() => _InboxScreenState();
++}
++
++class _InboxScreenState extends ConsumerState<InboxScreen> {
++  final _picker = ImagePicker();
++  bool _adding = false;
++
++  Future<void> _add(List<String> paths, PoSource source) async {
++    if (paths.isEmpty) return;
++    final messenger = ScaffoldMessenger.of(context);
++    setState(() => _adding = true);
++    try {
++      await ref.read(poIntakeServiceProvider).create(paths, source);
++      ref.read(inboxRunnerProvider).kick();
++      messenger.showSnackBar(
++        SnackBar(
++          content: Text(
++            paths.length == 1
++                ? 'Foto PO ditambahkan'
++                : 'PO dengan ${paths.length} halaman ditambahkan',
++          ),
++        ),
++      );
++    } on Object catch (e) {
++      messenger.showSnackBar(SnackBar(content: Text('Gagal menyimpan foto: $e')));
++    } finally {
++      if (mounted) setState(() => _adding = false);
++    }
++  }
++
++  /// Camera: one photo per page, then "Foto halaman berikutnya" or "Selesai".
++  Future<void> _camera() async {
++    final pages = <String>[];
++    while (mounted) {
++      final shot = await _picker.pickImage(
++        source: ImageSource.camera,
++        maxWidth: poMaxSide,
++        maxHeight: poMaxSide,
++        imageQuality: poJpegQuality,
++      );
++      if (shot == null) break;
++      pages.add(shot.path);
++      if (!mounted) return;
++      final more = await showDialog<bool>(
++        context: context,
++        builder: (context) => AlertDialog(
++          title: Text('Halaman ${pages.length} diambil'),
++          content: const Text('Nota ini punya halaman lain?'),
++          actions: [
++            TextButton(
++              onPressed: () => Navigator.pop(context, false),
++              child: const Text('Selesai'),
++            ),
++            FilledButton(
++              onPressed: () => Navigator.pop(context, true),
++              child: const Text('Foto halaman berikutnya'),
++            ),
++          ],
++        ),
++      );
++      if (more != true) break;
++    }
++    await _add(pages, PoSource.camera);
++  }
++
++  /// Gallery: several photos = several pages of one PO, in the order picked.
++  Future<void> _gallery() async {
++    final picked = await _picker.pickMultiImage(
++      maxWidth: poMaxSide,
++      maxHeight: poMaxSide,
++      imageQuality: poJpegQuality,
++    );
++    await _add([for (final x in picked) x.path], PoSource.gallery);
++  }
++
++  Future<void> _actions(InboxItem item) async {
++    final canRetry = item.status == 'failed';
++    final canDelete = item.status != 'saved' && item.status != 'uploading';
++    if (!canRetry && !canDelete) return;
++    final action = await showModalBottomSheet<String>(
++      context: context,
++      showDragHandle: true,
++      builder: (context) => SafeArea(
++        child: Column(
++          mainAxisSize: MainAxisSize.min,
++          children: [
++            if (canRetry)
++              ListTile(
++                leading: const Icon(Icons.refresh),
++                title: const Text('Coba baca lagi'),
++                onTap: () => Navigator.pop(context, 'retry'),
++              ),
++            if (canDelete)
++              ListTile(
++                leading: const Icon(Icons.delete_outline, color: AppColors.warn),
++                title: const Text('Hapus PO ini'),
++                subtitle: const Text('Fotonya juga dihapus dari HP ini'),
++                onTap: () => Navigator.pop(context, 'delete'),
++              ),
++          ],
++        ),
++      ),
++    );
++    if (!mounted || action == null) return;
++    final messenger = ScaffoldMessenger.of(context);
++    if (action == 'retry') {
++      await ref.read(poSyncServiceProvider).retry(item.id);
++      ref.read(inboxRunnerProvider).kick();
++    } else if (action == 'delete') {
++      try {
++        await ref.read(poIntakeServiceProvider).delete(item.id);
++        messenger.showSnackBar(const SnackBar(content: Text('PO dihapus')));
++      } on StateError {
++        messenger.showSnackBar(
++          const SnackBar(content: Text('PO ini sedang diunggah. Coba sebentar lagi.')),
++        );
++      }
++    }
++  }
++
++  void _open(InboxItem item) {
++    switch (item.status) {
++      case 'needs_review':
++        context.push('/po/${item.id}/review');
++      case 'saved':
++        ScaffoldMessenger.of(context).showSnackBar(
++          const SnackBar(content: Text('PO ini sudah tersimpan ke produk')),
++        );
++      default:
++        _actions(item);
++    }
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    final items = ref.watch(inboxItemsProvider);
++    final link = ref.watch(ownerLinkProvider).value;
++    final unsent = ref.watch(unsentCountProvider).value;
++    final progress = ref.watch(poSyncServiceProvider).uploadProgress;
++    final compact = screenSizeOf(context) == ScreenSize.compact;
++    final pad = compact ? 16.0 : 28.0;
++    final linked = link?.state == OwnerLinkState.linked;
++
++    return Scaffold(
++      appBar: compact
++          ? AppBar(
++              title: const Text('Inbox PO'),
++              actions: [
++                if ((unsent ?? 0) > 0)
++                  Padding(
++                    padding: const EdgeInsets.only(right: 12),
++                    child: StatusBadge(
++                      '$unsent belum terkirim',
++                      color: AppColors.attention,
++                    ),
++                  ),
++              ],
++            )
++          : null,
++      body: RefreshIndicator(
++        onRefresh: () async => ref.read(inboxRunnerProvider).kick(),
++        child: CustomScrollView(
++          physics: const AlwaysScrollableScrollPhysics(),
++          slivers: [
++            SliverPadding(
++              padding: EdgeInsets.fromLTRB(pad, compact ? 4 : 28, pad, 12),
++              sliver: SliverList.list(
++                children: [
++                  if (!compact)
++                    PageHeader(
++                      title: 'Inbox PO',
++                      subtitle: 'Foto nota supplier dibaca otomatis, lalu Anda '
++                          'periksa sebelum disimpan.',
++                      actions: [
++                        if ((unsent ?? 0) > 0)
++                          StatusBadge(
++                            '$unsent belum terkirim',
++                            color: AppColors.attention,
++                          ),
++                      ],
++                    ),
++                  const BackupBanner(margin: EdgeInsets.only(top: 8)),
++                  if (link != null && !linked)
++                    _NotLinkedBanner(
++                      notConfigured:
++                          link.state == OwnerLinkState.notConfigured,
++                    ),
++                  const SizedBox(height: 12),
++                  Row(
++                    children: [
++                      Expanded(
++                        child: _AddButton(
++                          icon: Icons.photo_camera_outlined,
++                          label: 'Kamera',
++                          onTap: _adding ? null : _camera,
++                        ),
++                      ),
++                      const SizedBox(width: 10),
++                      Expanded(
++                        child: _AddButton(
++                          icon: Icons.photo_library_outlined,
++                          label: 'Galeri',
++                          onTap: _adding ? null : _gallery,
++                        ),
++                      ),
++                      const SizedBox(width: 10),
++                      Expanded(
++                        child: _AddButton(
++                          icon: Icons.edit_note,
++                          label: 'Tambah manual',
++                          onTap: () => context.push('/tambah'),
++                        ),
++                      ),
++                    ],
++                  ),
++                  const SizedBox(height: 8),
++                  Text(
++                    'Tip: dari WhatsApp, tekan lama foto nota > Bagikan > '
++                    'Harga Toko.',
++                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
++                      color: AppColors.muted,
++                    ),
++                  ),
++                  const SizedBox(height: 16),
++                ],
++              ),
++            ),
++            ...items.when(
++              loading: () => [
++                const SliverToBoxAdapter(
++                  child: Center(child: CircularProgressIndicator()),
++                ),
++              ],
++              error: (e, _) => [
++                SliverToBoxAdapter(child: Center(child: Text('$e'))),
++              ],
++              data: (list) => list.isEmpty
++                  ? [
++                      const SliverFillRemaining(
++                        hasScrollBody: false,
++                        child: _Empty(),
++                      ),
++                    ]
++                  : [
++                      SliverPadding(
++                        padding: EdgeInsets.fromLTRB(pad, 0, pad, 32),
++                        sliver: ValueListenableBuilder<Map<String, int>>(
++                          valueListenable: progress,
++                          builder: (context, uploaded, _) => SliverList.separated(
++                            itemCount: list.length,
++                            separatorBuilder: (_, _) =>
++                                const SizedBox(height: 8),
++                            itemBuilder: (context, i) => _PoCard(
++                              item: list[i],
++                              uploaded: uploaded[list[i].id],
++                              linked: linked,
++                              onTap: () => _open(list[i]),
++                              onMore: () => _actions(list[i]),
++                            ),
++                          ),
++                        ),
++                      ),
++                    ],
++            ),
++          ],
++        ),
++      ),
++    );
++  }
++}
++
++class _NotLinkedBanner extends StatelessWidget {
++  const _NotLinkedBanner({required this.notConfigured});
++  final bool notConfigured;
++
++  @override
++  Widget build(BuildContext context) => Container(
++    margin: const EdgeInsets.only(top: 8),
++    padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
++    decoration: BoxDecoration(
++      color: AppColors.tint,
++      borderRadius: BorderRadius.circular(12),
++    ),
++    child: Row(
++      children: [
++        const Icon(Icons.cloud_off_outlined, color: AppColors.navy),
++        const SizedBox(width: 12),
++        Expanded(
++          child: Text(
++            notConfigured
++                ? 'Aplikasi ini belum terhubung ke server, jadi foto PO belum '
++                      'bisa dibaca. Foto tetap disimpan.'
++                : 'Foto PO dibaca di server. Masuk ke akun toko dulu; foto '
++                      'menunggu dan dikirim setelah itu.',
++          ),
++        ),
++        if (!notConfigured)
++          TextButton(
++            onPressed: () => context.push('/pengaturan/akun'),
++            child: const Text('Masuk'),
++          ),
++      ],
++    ),
++  );
++}
++
++class _AddButton extends StatelessWidget {
++  const _AddButton({required this.icon, required this.label, this.onTap});
++
++  final IconData icon;
++  final String label;
++  final VoidCallback? onTap;
++
++  @override
++  Widget build(BuildContext context) => Material(
++    color: AppColors.surface,
++    shape: RoundedRectangleBorder(
++      borderRadius: BorderRadius.circular(16),
++      side: const BorderSide(color: AppColors.border),
++    ),
++    child: InkWell(
++      borderRadius: BorderRadius.circular(16),
++      onTap: onTap,
++      child: Padding(
++        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 6),
++        child: Column(
++          children: [
++            Icon(icon, color: onTap == null ? AppColors.muted : AppColors.navy),
++            const SizedBox(height: 6),
++            Text(
++              label,
++              textAlign: TextAlign.center,
++              maxLines: 1,
++              overflow: TextOverflow.ellipsis,
++            ),
++          ],
++        ),
++      ),
++    ),
++  );
++}
++
++class _PoCard extends StatelessWidget {
++  const _PoCard({
++    required this.item,
++    required this.uploaded,
++    required this.linked,
++    required this.onTap,
++    required this.onMore,
++  });
++
++  final InboxItem item;
++  final int? uploaded;
++  final bool linked;
++  final VoidCallback onTap;
++  final VoidCallback onMore;
++
++  static const _source = {
++    'share': 'Dibagikan',
++    'whatsapp': 'WhatsApp',
++    'camera': 'Kamera',
++    'gallery': 'Galeri',
++  };
++
++  (String, Color) get _badge => switch (item.status) {
++    'queued' => ('Antre', AppColors.neutral),
++    'uploading' => ('Mengunggah', AppColors.navy),
++    'processing' => ('Diproses', AppColors.attention),
++    'needs_review' => ('Perlu dicek', AppColors.warn),
++    'saved' => ('Tersimpan', AppColors.ok),
++    _ => ('Gagal', AppColors.warn),
++  };
++
++  String get _detail {
++    final pages = '${item.pages} halaman';
++    return switch (item.status) {
++      'queued' => linked ? 'Menunggu sinyal' : 'Menunggu akun toko',
++      'uploading' => '${uploaded ?? 0} dari ${item.pages} halaman',
++      'processing' => 'Sedang dibaca',
++      'needs_review' =>
++        '${_source[item.source] ?? item.source} · $pages · '
++            '${item.lineCount} baris',
++      'saved' =>
++        'Tersimpan · ${DateFormat('d MMM', 'id_ID').format(item.createdAt)}',
++      _ => 'Tidak bisa dibaca. Ketuk untuk coba lagi.',
++    };
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    final (label, color) = _badge;
++    final text = Theme.of(context).textTheme;
++    final title = item.supplierName ?? 'Foto baru (${item.pages})';
++    return Card(
++      clipBehavior: Clip.antiAlias,
++      child: InkWell(
++        onTap: onTap,
++        onLongPress: onMore,
++        child: Padding(
++          padding: const EdgeInsets.all(10),
++          child: Row(
++            children: [
++              _Thumb(path: item.firstPage),
++              const SizedBox(width: 12),
++              Expanded(
++                child: Column(
++                  crossAxisAlignment: CrossAxisAlignment.start,
++                  children: [
++                    Text(
++                      title,
++                      style: text.titleMedium,
++                      maxLines: 1,
++                      overflow: TextOverflow.ellipsis,
++                    ),
++                    const SizedBox(height: 2),
++                    Text(
++                      _detail,
++                      style: text.bodySmall?.copyWith(color: AppColors.muted),
++                      maxLines: 1,
++                      overflow: TextOverflow.ellipsis,
++                    ),
++                    if (item.status == 'uploading' && item.pages > 0) ...[
++                      const SizedBox(height: 6),
++                      LinearProgressIndicator(
++                        value: (uploaded ?? 0) / item.pages,
++                        minHeight: 3,
++                      ),
++                    ],
++                  ],
++                ),
++              ),
++              const SizedBox(width: 8),
++              StatusBadge(label, color: color),
++            ],
++          ),
++        ),
++      ),
++    );
++  }
++}
++
++class _Thumb extends StatelessWidget {
++  const _Thumb({required this.path});
++  final String? path;
++
++  @override
++  Widget build(BuildContext context) {
++    final p = path;
++    return ClipRRect(
++      borderRadius: BorderRadius.circular(12),
++      child: Container(
++        width: 56,
++        height: 56,
++        color: AppColors.tint,
++        child: p == null
++            ? const Icon(Icons.receipt_long, color: AppColors.navy)
++            : Image.file(
++                File(p),
++                fit: BoxFit.cover,
++                // Decode small: a list of full-size photos would use a lot of
++                // memory on a cheap phone.
++                cacheWidth: 112,
++                errorBuilder: (_, _, _) =>
++                    const Icon(Icons.receipt_long, color: AppColors.navy),
++              ),
++      ),
++    );
++  }
++}
++
++class _Empty extends StatelessWidget {
++  const _Empty();
++
++  @override
++  Widget build(BuildContext context) => const Center(
++    child: Padding(
++      padding: EdgeInsets.all(32),
++      child: Column(
++        mainAxisSize: MainAxisSize.min,
++        children: [
++          Text('🧾', style: TextStyle(fontSize: 52)),
++          SizedBox(height: 12),
++          Text(
++            'Belum ada PO',
++            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
++          ),
++          SizedBox(height: 4),
++          Text(
++            'Foto nota dari supplier, pilih dari galeri, atau bagikan dari '
++            'WhatsApp. Harga supplier dibaca otomatis.',
++            textAlign: TextAlign.center,
++          ),
++        ],
++      ),
++    ),
++  );
++}
+diff --git a/app/lib/inbox/po_intake_service.dart b/app/lib/inbox/po_intake_service.dart
+new file mode 100644
+index 0000000..3ddb121
+--- /dev/null
++++ b/app/lib/inbox/po_intake_service.dart
+@@ -0,0 +1,110 @@
++import 'dart:io';
++
++import 'package:drift/drift.dart';
++import 'package:path/path.dart' as p;
++import 'package:uuid/uuid.dart';
++
++import '../data/owner_database.dart';
++
++/// Where a PO came from (purchase_orders.source).
++enum PoSource { camera, gallery, share }
++
++/// Step 1 of build guide section 9: a new PO ('queued') with its pages copied
++/// into the app's own folder. The images are already shrunk to about 1600 px
++/// on the long side (image_picker does it for camera and gallery, the share
++/// handler in MainActivity.kt for shared photos). Nothing here needs signal.
++class PoIntakeService {
++  PoIntakeService(
++    this._db,
++    this._baseDir, {
++    Uuid uuid = const Uuid(),
++  }) : _uuid = uuid;
++
++  final OwnerDatabase _db;
++
++  /// The app documents folder (a function so it's only looked up when used).
++  final Future<Directory> Function() _baseDir;
++  final Uuid _uuid;
++
++  /// Creates the PO from [images] in page order and returns its id. The
++  /// source files are left alone; shared ones live in the cache anyway.
++  Future<String> create(List<String> images, PoSource source) async {
++    if (images.isEmpty) throw ArgumentError('Tidak ada foto');
++    final id = _uuid.v4();
++    final dir = Directory(p.join((await _baseDir()).path, 'po_pages', id));
++    await dir.create(recursive: true);
++
++    final pages = <String>[];
++    try {
++      for (var i = 0; i < images.length; i++) {
++        final dest = p.join(dir.path, '${i + 1}.jpg');
++        await File(images[i]).copy(dest);
++        pages.add(dest);
++      }
++      await _db.transaction(() async {
++        await _db.customInsert(
++          "INSERT INTO purchase_orders (id, status, source) VALUES (?, 'queued', ?)",
++          variables: [Variable.withString(id), Variable.withString(source.name)],
++          updates: {_db.purchaseOrders},
++        );
++        for (var i = 0; i < pages.length; i++) {
++          await _db.customInsert(
++            'INSERT INTO po_pages (id, po_id, page_no, local_path) '
++            'VALUES (?, ?, ?, ?)',
++            variables: [
++              Variable.withString(_uuid.v4()),
++              Variable.withString(id),
++              Variable.withInt(i + 1),
++              Variable.withString(pages[i]),
++            ],
++            updates: {_db.poPages},
++          );
++        }
++      });
++    } catch (_) {
++      // No half PO: remove the copies if anything failed.
++      if (await dir.exists()) await dir.delete(recursive: true);
++      rethrow;
++    }
++    return id;
++  }
++
++  /// Deletes a PO that isn't saved, with its photos on this phone. A job
++  /// already on the server is left to the server's 14-day cleanup.
++  Future<void> delete(String poId) async {
++    final pages = await _db
++        .customSelect(
++          'SELECT local_path FROM po_pages WHERE po_id = ?',
++          variables: [Variable.withString(poId)],
++        )
++        .get();
++    // The database doesn't enforce foreign keys, so the PO's pages and lines
++    // are deleted explicitly, in one transaction.
++    final deleted = await _db.transaction(() async {
++      final n = await _db.customUpdate(
++        "DELETE FROM purchase_orders WHERE id = ? "
++        "AND status NOT IN ('saved', 'uploading')",
++        variables: [Variable.withString(poId)],
++        updates: {_db.purchaseOrders},
++        updateKind: UpdateKind.delete,
++      );
++      if (n == 0) return 0;
++      for (final table in ['po_lines', 'po_pages']) {
++        await _db.customUpdate(
++          'DELETE FROM $table WHERE po_id = ?',
++          variables: [Variable.withString(poId)],
++          updates: {table == 'po_lines' ? _db.poLines : _db.poPages},
++          updateKind: UpdateKind.delete,
++        );
++      }
++      return n;
++    });
++    if (deleted == 0) throw StateError('PO ini tidak bisa dihapus');
++    for (final r in pages) {
++      final f = File(r.read<String>('local_path'));
++      if (await f.exists()) await f.delete();
++    }
++    final dir = Directory(p.join((await _baseDir()).path, 'po_pages', poId));
++    if (await dir.exists()) await dir.delete(recursive: true);
++  }
++}
+diff --git a/app/lib/inbox/po_sync_service.dart b/app/lib/inbox/po_sync_service.dart
+new file mode 100644
+index 0000000..66afda2
+--- /dev/null
++++ b/app/lib/inbox/po_sync_service.dart
+@@ -0,0 +1,257 @@
++import 'dart:convert';
++import 'dart:io';
++
++import 'package:drift/drift.dart';
++import 'package:flutter/foundation.dart' show ValueNotifier;
++
++import '../core/server_api.dart';
++import '../data/owner_database.dart';
++import 'po_import_service.dart';
++
++enum PoSyncOutcome {
++  /// No server, nobody signed in as owner, or no store: POs stay queued.
++  notConnected,
++  done,
++
++  /// Signal lost: queued POs wait, nothing is lost.
++  offline,
++}
++
++class PoSyncResult {
++  const PoSyncResult(
++    this.outcome, {
++    this.processing = 0,
++    this.queued = 0,
++    this.readyForReview = 0,
++  });
++
++  final PoSyncOutcome outcome;
++
++  /// POs the server is still reading (poll again soon).
++  final int processing;
++
++  /// POs still waiting to upload.
++  final int queued;
++
++  /// POs that became "Perlu dicek" in this run.
++  final int readyForReview;
++}
++
++/// Steps 2 to 5 of build guide section 9, for every PO that needs it:
++///
++/// 2. upload the pages to po-images/{store_id}/{po_id}/{n}.jpg ('uploading')
++/// 3. submit_extraction, save the job id ('processing')
++/// 4. poll the job
++/// 5. when done: import the result (matching runs on the phone, the PO becomes
++///    'needs_review'), then mark_extraction_fetched so the server deletes it.
++///
++/// Safe to call any time; without signal POs simply stay where they are.
++class PoSyncService {
++  PoSyncService(this._db, this._api, this._importer);
++
++  final OwnerDatabase _db;
++  final ServerApi? _api;
++  final PoImportService _importer;
++
++  /// Pages uploaded so far per PO, for "1 dari 2 halaman".
++  final uploadProgress = ValueNotifier<Map<String, int>>(const {});
++
++  Future<PoSyncResult>? _running;
++
++  Future<PoSyncResult> run() =>
++      _running ??= _run().whenComplete(() => _running = null);
++
++  Future<String?> _storeId() async => (await _db
++          .customSelect('SELECT store_id FROM settings WHERE id = 1')
++          .getSingle())
++      .readNullable<String>('store_id');
++
++  Future<PoSyncResult> _run() async {
++    final api = _api;
++    final user = api?.currentUser;
++    final store = await _storeId();
++    if (api == null || user == null || user.isAnonymous || store == null) {
++      return PoSyncResult(
++        PoSyncOutcome.notConnected,
++        queued: await _count("status IN ('queued', 'uploading')"),
++      );
++    }
++
++    var outcome = PoSyncOutcome.done;
++    try {
++      final waiting = await _db
++          .customSelect(
++            "SELECT id FROM purchase_orders WHERE status IN ('queued', 'uploading') "
++            'AND server_job_id IS NULL ORDER BY created_at',
++          )
++          .get();
++      for (final r in waiting) {
++        await _upload(api, store, r.read<String>('id'));
++      }
++    } on ServerException catch (e) {
++      // No signal: stop here, everything waits for the next run. Refused
++      // (not this store's owner): uploads stop, already running jobs are
++      // still checked below.
++      if (e.kind == ServerErrorKind.offline) {
++        return PoSyncResult(
++          PoSyncOutcome.offline,
++          processing: await _count("status = 'processing'"),
++          queued: await _count("status IN ('queued', 'uploading')"),
++        );
++      }
++    }
++
++    var ready = 0;
++    try {
++      final processing = await _db
++          .customSelect(
++            "SELECT id, server_job_id FROM purchase_orders "
++            "WHERE status = 'processing' AND server_job_id IS NOT NULL "
++            'ORDER BY created_at',
++          )
++          .get();
++      for (final r in processing) {
++        if (await _poll(
++          api,
++          r.read<String>('id'),
++          r.read<String>('server_job_id'),
++        )) {
++          ready++;
++        }
++      }
++    } on ServerException catch (e) {
++      if (e.kind == ServerErrorKind.offline) outcome = PoSyncOutcome.offline;
++    }
++
++    return PoSyncResult(
++      outcome,
++      processing: await _count("status = 'processing'"),
++      queued: await _count("status IN ('queued', 'uploading')"),
++      readyForReview: ready,
++    );
++  }
++
++  Future<int> _count(String where) async => (await _db
++          .customSelect('SELECT COUNT(*) AS n FROM purchase_orders WHERE $where')
++          .getSingle())
++      .read<int>('n');
++
++  Future<void> _setStatus(String poId, String status, {String? jobId}) =>
++      _db.customUpdate(
++        'UPDATE purchase_orders SET status = ?, '
++        'server_job_id = COALESCE(?, server_job_id) WHERE id = ?',
++        variables: [
++          Variable.withString(status),
++          Variable<String>(jobId),
++          Variable.withString(poId),
++        ],
++        updates: {_db.purchaseOrders},
++      );
++
++  void _progress(String poId, int? pages) {
++    final m = Map<String, int>.of(uploadProgress.value);
++    if (pages == null) {
++      m.remove(poId);
++    } else {
++      m[poId] = pages;
++    }
++    uploadProgress.value = m;
++  }
++
++  /// Uploads one PO and submits it. Throws [ServerException] for offline and
++  /// refused, after putting the PO back in the queue.
++  Future<void> _upload(ServerApi api, String store, String poId) async {
++    final pages = await _db
++        .customSelect(
++          'SELECT page_no, local_path FROM po_pages WHERE po_id = ? ORDER BY page_no',
++          variables: [Variable.withString(poId)],
++        )
++        .get();
++    if (pages.isEmpty) {
++      await _setStatus(poId, 'failed');
++      return;
++    }
++    await _setStatus(poId, 'uploading');
++    _progress(poId, 0);
++    try {
++      final paths = <String>[];
++      for (final page in pages) {
++        final file = File(page.read<String>('local_path'));
++        if (!await file.exists()) {
++          // The photo is gone from the phone: nothing to upload, ever.
++          await _setStatus(poId, 'failed');
++          return;
++        }
++        final remote = '$store/$poId/${page.read<int>('page_no')}.jpg';
++        await api.uploadPoPage(remote, await file.readAsBytes());
++        paths.add(remote);
++        _progress(poId, paths.length);
++      }
++      final job = await api.submitExtraction(store, paths);
++      await _setStatus(poId, 'processing', jobId: job);
++    } on ServerException catch (e) {
++      // Back to the queue; pages already uploaded are simply uploaded again
++      // (upsert), so there is no half state to clean up.
++      await _setStatus(poId, 'queued');
++      if (e.kind == ServerErrorKind.offline ||
++          e.kind == ServerErrorKind.notAllowed) {
++        rethrow;
++      }
++    } finally {
++      _progress(poId, null);
++    }
++  }
++
++  /// Checks one job. Returns true when the PO became ready for review.
++  Future<bool> _poll(ServerApi api, String poId, String jobId) async {
++    final job = await api.extractionJob(jobId);
++    if (job == null) {
++      // The server deleted it (more than 14 days old): read it again.
++      await _db.customUpdate(
++        "UPDATE purchase_orders SET status = 'queued', server_job_id = NULL "
++        'WHERE id = ?',
++        variables: [Variable.withString(poId)],
++        updates: {_db.purchaseOrders},
++      );
++      return false;
++    }
++    switch (job.status) {
++      case 'done':
++        var ok = true;
++        try {
++          await _importer.importResult(poId, jsonEncode(job.result));
++        } on Object {
++          // A result the phone can't use (FormatException) or a PO that
++          // changed meanwhile: show it as failed so it can be read again.
++          ok = false;
++          await _setStatus(poId, 'failed');
++        }
++        await _markFetched(api, jobId);
++        return ok;
++      case 'failed':
++        await _setStatus(poId, 'failed');
++        await _markFetched(api, jobId);
++        return false;
++      default:
++        return false; // pending or running: ask again later
++    }
++  }
++
++  /// The result is on the phone now. If this call is lost, the server deletes
++  /// the job after 14 days anyway.
++  Future<void> _markFetched(ServerApi api, String jobId) async {
++    try {
++      await api.markExtractionFetched(jobId);
++    } on ServerException {
++      // Ignore: see above.
++    }
++  }
++
++  /// "Coba lagi" on a failed PO: upload and read it again.
++  Future<void> retry(String poId) => _db.customUpdate(
++    "UPDATE purchase_orders SET status = 'queued', server_job_id = NULL "
++    "WHERE id = ? AND status = 'failed'",
++    variables: [Variable.withString(poId)],
++    updates: {_db.purchaseOrders},
++  );
++}
+diff --git a/app/lib/inbox/share_intake.dart b/app/lib/inbox/share_intake.dart
+new file mode 100644
+index 0000000..725d515
+--- /dev/null
++++ b/app/lib/inbox/share_intake.dart
+@@ -0,0 +1,30 @@
++import 'package:flutter/services.dart';
++
++/// Photos shared to the app (WhatsApp, Gallery, Files...). The Android side is
++/// our own code in MainActivity.kt, not a plugin: it receives the share,
++/// shrinks each photo to about 1600 px and keeps the files until Dart takes
++/// them. Only the owner's phone takes them.
++class ShareIntake {
++  ShareIntake({MethodChannel? channel})
++    : _channel = channel ?? const MethodChannel(channelName);
++
++  static const channelName = 'harga_toko/share';
++  final MethodChannel _channel;
++
++  /// [onAvailable] is called when photos were shared while the app runs.
++  void listen(void Function() onAvailable) {
++    _channel.setMethodCallHandler((call) async {
++      if (call.method == 'sharedAvailable') onAvailable();
++    });
++  }
++
++  /// Shared photos waiting (file paths, in the order shared). Each call
++  /// returns them once. Empty on platforms without the native side.
++  Future<List<String>> take() async {
++    try {
++      return await _channel.invokeListMethod<String>('takeShared') ?? const [];
++    } on MissingPluginException {
++      return const [];
++    }
++  }
++}
+diff --git a/app/lib/main.dart b/app/lib/main.dart
+index 268f44c..25d8ab4 100644
+--- a/app/lib/main.dart
++++ b/app/lib/main.dart
+@@ -14,6 +14,9 @@ import 'core/router.dart';
+ import 'core/server_config.dart';
+ import 'core/server_providers.dart';
+ import 'core/ui.dart';
++import 'inbox/inbox_providers.dart';
++import 'inbox/po_intake_service.dart';
++import 'inbox/share_intake.dart';
+ import 'onboarding/shop_profile.dart';
+ 
+ Future<void> main() async {
+@@ -51,18 +54,67 @@ Future<void> main() async {
+   );
+ }
+ 
+-class App extends ConsumerWidget {
++class App extends ConsumerStatefulWidget {
+   const App({super.key});
+ 
+   @override
+-  Widget build(BuildContext context, WidgetRef ref) {
+-    // The owner's phone publishes to the employee catalog in the background.
++  ConsumerState<App> createState() => _AppState();
++}
++
++class _AppState extends ConsumerState<App> {
++  final _messenger = GlobalKey<ScaffoldMessengerState>();
++  final _share = ShareIntake();
++
++  @override
++  void initState() {
++    super.initState();
++    _share.listen(_takeShared);
++    WidgetsBinding.instance.addPostFrameCallback((_) => _takeShared());
++  }
++
++  /// Photos shared from WhatsApp and other apps become a PO in the Inbox.
++  /// Only on the owner's phone; elsewhere they stay with Android until then.
++  Future<void> _takeShared() async {
++    if (ref.read(appModeProvider) != AppMode.owner) return;
++    final paths = await _share.take();
++    if (paths.isEmpty) return;
++    try {
++      await ref.read(poIntakeServiceProvider).create(paths, PoSource.share);
++      ref.read(inboxRunnerProvider).kick();
++      ref.read(routerProvider).go('/inbox');
++      _messenger.currentState?.showSnackBar(
++        SnackBar(
++          content: Text(
++            paths.length == 1
++                ? 'Foto PO diterima'
++                : 'PO dengan ${paths.length} halaman diterima',
++          ),
++        ),
++      );
++    } on Object catch (e) {
++      _messenger.currentState?.showSnackBar(
++        SnackBar(content: Text('Foto tidak bisa disimpan: $e')),
++      );
++    }
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    // The owner's phone publishes to the employee catalog and moves PO photos
++    // along in the background.
+     if (ref.watch(appModeProvider) == AppMode.owner) {
+       ref.watch(autoPublisherProvider);
++      if (ref.watch(serverApiProvider) != null) ref.watch(inboxRunnerProvider);
+     }
++    // Becoming the owner (after onboarding or restore) picks up a share that
++    // arrived before.
++    ref.listen(appModeProvider, (_, mode) {
++      if (mode == AppMode.owner) _takeShared();
++    });
+     return MaterialApp.router(
+       title: 'Harga Toko',
+       theme: buildAppTheme(),
++      scaffoldMessengerKey: _messenger,
+       routerConfig: ref.watch(routerProvider),
+     );
+   }
+diff --git a/app/pubspec.yaml b/app/pubspec.yaml
+index 8784571..d606b01 100644
+--- a/app/pubspec.yaml
++++ b/app/pubspec.yaml
+@@ -15,6 +15,7 @@ dependencies:
+     sdk: flutter
+   flutter_riverpod: ^3.4.3
+   go_router: ^18.0.2
++  image_picker: ^1.1.2
+   intl: ^0.20.3
+   path: ^1.9.1
+   path_provider: ^2.1.6
+diff --git a/app/test/core/router_redirect_test.dart b/app/test/core/router_redirect_test.dart
+index 71dd9a0..5431526 100644
+--- a/app/test/core/router_redirect_test.dart
++++ b/app/test/core/router_redirect_test.dart
+@@ -36,8 +36,11 @@ void main() {
+   test('shell sections', () {
+     expect(OwnerShell.sectionOf('/'), '/');
+     expect(OwnerShell.sectionOf('/kategori/x'), '/');
+-    expect(OwnerShell.sectionOf('/produk/abc/ubah'), '/produk');
++    expect(OwnerShell.sectionOf('/produk/abc/ubah'), '/');
+     expect(OwnerShell.sectionOf('/pengaturan/akun'), '/pengaturan');
++    expect(OwnerShell.sectionOf('/pengaturan/cadangan'), '/pengaturan/cadangan');
+     expect(OwnerShell.sectionOf('/tim'), '/tim');
++    expect(OwnerShell.sectionOf('/inbox'), '/inbox');
++    expect(OwnerShell.sectionOf('/po/abc/review'), '/inbox');
+   });
+ }
+diff --git a/app/test/inbox/po_sync_service_test.dart b/app/test/inbox/po_sync_service_test.dart
+new file mode 100644
+index 0000000..48000bb
+--- /dev/null
++++ b/app/test/inbox/po_sync_service_test.dart
+@@ -0,0 +1,195 @@
++import 'dart:io';
++
++import 'package:drift/drift.dart' hide isNotNull, isNull;
++import 'package:drift/native.dart';
++import 'package:flutter_application_1/data/owner_database.dart';
++import 'package:flutter_application_1/inbox/debug_sample.dart';
++import 'package:flutter_application_1/inbox/po_import_service.dart';
++import 'package:flutter_application_1/inbox/po_intake_service.dart';
++import 'package:flutter_application_1/inbox/po_sync_service.dart';
++import 'package:flutter_application_1/team/owner_account_service.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:path/path.dart' as p;
++
++import '../support/fake_server_api.dart';
++
++void main() {
++  late OwnerDatabase db;
++  late Directory tmp;
++  late PoIntakeService intake;
++  late FakeServerApi api;
++  late PoSyncService sync;
++  late String store;
++
++  setUp(() async {
++    db = OwnerDatabase(NativeDatabase.memory());
++    tmp = await Directory.systemTemp.createTemp('po_test');
++    intake = PoIntakeService(db, () async => tmp);
++    api = FakeServerApi();
++    sync = PoSyncService(db, api, PoImportService(db));
++    await api.signUp('budi@email.com', 'rahasia123');
++    await OwnerAccountService(db, api).createStore('Toko Berkah');
++    store = api.stores.keys.single;
++  });
++  tearDown(() async {
++    await db.close();
++    if (await tmp.exists()) await tmp.delete(recursive: true);
++  });
++
++  /// Photos as image_picker or the share handler would hand them over.
++  Future<List<String>> photos(int n) async => [
++    for (var i = 1; i <= n; i++)
++      (await File(p.join(tmp.path, 'src_$i.jpg')).writeAsBytes([0xFF, 0xD8, i])).path,
++  ];
++
++  Future<Map<String, Object?>> po(String id) async {
++    final r = await db
++        .customSelect(
++          'SELECT status, server_job_id FROM purchase_orders WHERE id = ?',
++          variables: [Variable.withString(id)],
++        )
++        .getSingle();
++    return {'status': r.read<String>('status'), 'job': r.readNullable<String>('server_job_id')};
++  }
++
++  test('intake: a queued PO with its pages copied in order', () async {
++    final id = await intake.create(await photos(2), PoSource.share);
++    expect((await po(id))['status'], 'queued');
++    final pages = await db
++        .customSelect(
++          'SELECT page_no, local_path FROM po_pages WHERE po_id = ? ORDER BY page_no',
++          variables: [Variable.withString(id)],
++        )
++        .get();
++    expect(pages.map((r) => r.read<int>('page_no')), [1, 2]);
++    final second = File(pages[1].read<String>('local_path'));
++    expect(second.path, endsWith(p.join('po_pages', id, '2.jpg')));
++    expect(await second.readAsBytes(), [0xFF, 0xD8, 2]);
++  });
++
++  test('upload: pages go to {store}/{po}/{n}.jpg and the job is submitted', () async {
++    final id = await intake.create(await photos(2), PoSource.camera);
++    final r = await sync.run();
++
++    expect(r.outcome, PoSyncOutcome.done);
++    expect(r.processing, 1);
++    expect(api.uploads.keys, ['$store/$id/1.jpg', '$store/$id/2.jpg']);
++    final state = await po(id);
++    expect(state['status'], 'processing');
++    expect(api.jobPaths[state['job']], ['$store/$id/1.jpg', '$store/$id/2.jpg']);
++  });
++
++  test('done: result imported for review, then marked fetched', () async {
++    final id = await intake.create(await photos(1), PoSource.gallery);
++    await sync.run();
++    final job = (await po(id))['job'] as String;
++
++    // Still being read: nothing changes.
++    await sync.run();
++    expect((await po(id))['status'], 'processing');
++
++    api.finishJob(job, result: Map<String, dynamic>.from(debugSampleExtraction));
++    final r = await sync.run();
++    expect(r.readyForReview, 1);
++    expect((await po(id))['status'], 'needs_review');
++    expect(api.fetched, {job});
++    final lines = await db
++        .customSelect(
++          'SELECT COUNT(*) AS n FROM po_lines WHERE po_id = ?',
++          variables: [Variable.withString(id)],
++        )
++        .getSingle();
++    expect(lines.read<int>('n'), 5);
++  });
++
++  test('failed on the server: Gagal, fetched, and Coba lagi reads it again', () async {
++    final id = await intake.create(await photos(1), PoSource.camera);
++    await sync.run();
++    final job = (await po(id))['job'] as String;
++    api.finishJob(job, error: 'model busy');
++    await sync.run();
++    expect((await po(id))['status'], 'failed');
++    expect(api.fetched, {job});
++
++    await sync.retry(id);
++    expect(await po(id), {'status': 'queued', 'job': null});
++    await sync.run();
++    final again = await po(id);
++    expect(again['status'], 'processing');
++    expect(again['job'], isNot(job));
++  });
++
++  test('a result the phone cannot use is Gagal, not a broken review', () async {
++    final id = await intake.create(await photos(1), PoSource.camera);
++    await sync.run();
++    final job = (await po(id))['job'] as String;
++    api.finishJob(job, result: {'lines': 'not a list'});
++    await sync.run();
++    expect((await po(id))['status'], 'failed');
++    expect(api.fetched, {job});
++  });
++
++  test('signal lost mid-upload: back to the queue, finished on the next run', () async {
++    final id = await intake.create(await photos(3), PoSource.share);
++    api.goOfflineAfterUploads = 1;
++    final r = await sync.run();
++    expect(r.outcome, PoSyncOutcome.offline);
++    expect(await po(id), {'status': 'queued', 'job': null});
++    expect(sync.uploadProgress.value, isEmpty);
++
++    api.goOfflineAfterUploads = null;
++    api.offline = false;
++    await sync.run();
++    expect((await po(id))['status'], 'processing');
++    expect(api.uploads.length, 3);
++  });
++
++  test('not connected: photos wait in the queue', () async {
++    await api.signOut();
++    final id = await intake.create(await photos(1), PoSource.camera);
++    final r = await sync.run();
++    expect(r.outcome, PoSyncOutcome.notConnected);
++    expect(r.queued, 1);
++    expect((await po(id))['status'], 'queued');
++    expect(api.uploads, isEmpty);
++
++    final none = PoSyncService(db, null, PoImportService(db));
++    expect((await none.run()).outcome, PoSyncOutcome.notConnected);
++  });
++
++  test('a photo missing from the phone makes the PO fail, not loop', () async {
++    final id = await intake.create(await photos(1), PoSource.camera);
++    final page = (await db.customSelect('SELECT local_path FROM po_pages').getSingle())
++        .read<String>('local_path');
++    await File(page).delete();
++    await sync.run();
++    expect((await po(id))['status'], 'failed');
++  });
++
++  test('a job the server no longer has is read again', () async {
++    final id = await intake.create(await photos(1), PoSource.camera);
++    await sync.run();
++    api.jobs.clear();
++    await sync.run();
++    // Re-queued and, in the same run's next pass or the next run, uploaded.
++    expect((await po(id))['status'], anyOf('queued', 'processing'));
++  });
++
++  test('delete removes the PO and its photos, but never a saved PO', () async {
++    final id = await intake.create(await photos(2), PoSource.camera);
++    await intake.delete(id);
++    expect(
++      await db.customSelect('SELECT * FROM purchase_orders').get(),
++      isEmpty,
++    );
++    // Foreign keys are not enforced here, so the pages must go explicitly.
++    expect(await db.customSelect('SELECT * FROM po_pages').get(), isEmpty);
++    expect(await Directory(p.join(tmp.path, 'po_pages', id)).exists(), isFalse);
++
++    final saved = await intake.create(await photos(1), PoSource.camera);
++    await db.customStatement(
++      "UPDATE purchase_orders SET status = 'saved' WHERE id = '$saved'",
++    );
++    await expectLater(intake.delete(saved), throwsStateError);
++  });
++}
+diff --git a/app/test/support/fake_server_api.dart b/app/test/support/fake_server_api.dart
+index 05fe1da..6bdc200 100644
+--- a/app/test/support/fake_server_api.dart
++++ b/app/test/support/fake_server_api.dart
+@@ -1,4 +1,5 @@
+ import 'dart:async';
++import 'dart:typed_data';
+ 
+ import 'package:flutter_application_1/core/server_api.dart';
+ 
+@@ -218,4 +219,64 @@ class FakeServerApi implements ServerApi {
+ 
+   @override
+   Future<void> revokeInvite(String inviteId) async {}
++
++  // ------------------------------------------------------------ PO reading
++
++  /// Uploaded objects in 'po-images', by path.
++  final uploads = <String, Uint8List>{};
++
++  /// Jobs by id: what the worker would have written.
++  final jobs = <String, ExtractionJob>{};
++  final jobPaths = <String, List<String>>{};
++  final fetched = <String>{};
++
++  /// Fail uploads after this many succeeded (a signal lost mid-PO).
++  int? goOfflineAfterUploads;
++
++  @override
++  Future<void> uploadPoPage(String path, Uint8List jpeg) async {
++    _check();
++    if (goOfflineAfterUploads != null &&
++        uploads.length >= goOfflineAfterUploads!) {
++      offline = true;
++      _check();
++    }
++    final store = path.split('/').first;
++    if (user == null || owners[store] != user!.id) {
++      throw const ServerException(ServerErrorKind.notAllowed);
++    }
++    uploads[path] = jpeg;
++  }
++
++  @override
++  Future<String> submitExtraction(String storeId, List<String> paths) async {
++    _check();
++    if (user == null || owners[storeId] != user!.id) {
++      throw const ServerException(ServerErrorKind.notAllowed);
++    }
++    if (paths.isEmpty) throw const ServerException(ServerErrorKind.other);
++    final id = 'job-${_ids++}';
++    jobs[id] = const ExtractionJob(status: 'pending');
++    jobPaths[id] = paths;
++    return id;
++  }
++
++  /// What the Go worker does: store a result (or a failure).
++  void finishJob(String id, {Map<String, dynamic>? result, String? error}) {
++    jobs[id] = result != null
++        ? ExtractionJob(status: 'done', result: result)
++        : ExtractionJob(status: 'failed', error: error ?? 'gagal');
++  }
++
++  @override
++  Future<ExtractionJob?> extractionJob(String jobId) async {
++    _check();
++    return jobs[jobId];
++  }
++
++  @override
++  Future<void> markExtractionFetched(String jobId) async {
++    _check();
++    fetched.add(jobId);
++  }
+ }
+diff --git a/docs/server-setup.md b/docs/server-setup.md
+index 4e51f86..f891667 100644
+--- a/docs/server-setup.md
++++ b/docs/server-setup.md
+@@ -60,3 +60,59 @@ offline; the account and team screens then say the server isn't set up.
+ 5. Owner changes a price; second phone pulls down to refresh: new price.
+ 6. Owner: Tim > Cabut. Second phone refreshes: "Akses ke toko berakhir",
+    catalog deleted, back to the welcome screen.
++
++---
++
++# Milestone 4: PO reading
++
++## 6. Storage bucket (now required)
++
++Dashboard > **Storage** > New bucket: **`po-images`**, **private** (public
++off). The access policies are already in the migration: only the store's owner
++can upload, the worker reads and deletes with the service key.
++
++## 7. The worker on the Ubuntu server
++
++The worker only makes outgoing connections (database and storage), so it needs
++no open port, no domain and no HTTPS.
++
++```bash
++sudo apt install -y golang-go   # any Go 1.21+; it downloads Go 1.27 by itself (go.mod)
++cd worker
++go mod tidy                     # first time: fetches pgx and writes go.sum
++go vet ./... && go test ./...   # database tests skip without TEST_DATABASE_URL
++go build -o worker .
++```
++
++Then follow the steps at the top of `deploy/harga-toko-worker.service`, with
++`.env.example` filled in as `/etc/harga-toko/worker.env`.
++
++Watch it: `journalctl -u harga-toko-worker -f`. "job claimed" and "job done"
++lines appear for every PO.
++
++### Database tests
++
++They need a Postgres you can wipe. Either a local Supabase (`supabase start`
++in the repo root):
++
++```bash
++TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:54322/postgres go test ./...
++```
++
++or any Postgres 15+ (`sudo apt install postgresql`, create an empty database);
++the schema is applied on first use. **Never point it at the real project**: the
++tests empty the tables.
++
++## 8. Check (Milestone 4 "done when")
++
++1. Worker running (`journalctl` shows "worker started").
++2. Owner phone: WhatsApp > long-press a nota photo > Bagikan > Harga Toko.
++   The app opens on Inbox: "Foto baru" goes Antre > Mengunggah > Diproses >
++   Perlu dicek within seconds (the fake extractor answers at once with the
++   sample nota from CV Maju Elektrik).
++3. Tap it, review, Simpan: products saved, and Katalog karyawan goes back to
++   "Terbaru" after a few seconds.
++4. Employee phone, pull to refresh: the new products appear.
++5. Supabase > Storage > po-images is empty again (photos are deleted after
++   reading), and the job row disappears from extraction_jobs on the worker's
++   next daily cleanup.
+diff --git a/worker/.env.example b/worker/.env.example
+new file mode 100644
+index 0000000..cd3b69c
+--- /dev/null
++++ b/worker/.env.example
+@@ -0,0 +1,19 @@
++# Copy to /etc/harga-toko/worker.env (chmod 600). Never commit the real file.
++
++# Supabase > Project Settings > Database > Connection string > "Session pooler".
++# The direct db.<ref>.supabase.co address is IPv6-only on most plans.
++DATABASE_URL=postgresql://postgres.gculrkdumuuejsiqsniq:YOUR-DB-PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres
++
++SUPABASE_URL=https://gculrkdumuuejsiqsniq.supabase.co
++
++# Supabase > Project Settings > API Keys > service_role (legacy) or a secret key
++# (sb_secret_...). This key bypasses all security: worker only, never the app.
++SUPABASE_SERVICE_KEY=
++
++# fake = fixed sample data (Milestone 4). ollama / cloud come in Milestone 5.
++EXTRACTOR=fake
++
++# Optional
++# POLL_INTERVAL=3s
++# JOB_TIMEOUT=3m
++# WORKER_ID=ubuntu-1
+diff --git a/worker/.gitignore b/worker/.gitignore
+new file mode 100644
+index 0000000..fce95db
+--- /dev/null
++++ b/worker/.gitignore
+@@ -0,0 +1,3 @@
++.env
++worker
++/harga-toko-worker
+diff --git a/worker/deploy/harga-toko-worker.service b/worker/deploy/harga-toko-worker.service
+new file mode 100644
+index 0000000..3865f4d
+--- /dev/null
++++ b/worker/deploy/harga-toko-worker.service
+@@ -0,0 +1,27 @@
++# systemd unit for the extraction worker on the Ubuntu server.
++#   sudo useradd --system --no-create-home harga-toko
++#   sudo install -m 755 worker /usr/local/bin/harga-toko-worker
++#   sudo install -m 600 -o harga-toko .env /etc/harga-toko/worker.env
++#   sudo cp deploy/harga-toko-worker.service /etc/systemd/system/
++#   sudo systemctl daemon-reload && sudo systemctl enable --now harga-toko-worker
++#   journalctl -u harga-toko-worker -f
++[Unit]
++Description=Harga Toko PO extraction worker
++After=network-online.target
++Wants=network-online.target
++
++[Service]
++User=harga-toko
++EnvironmentFile=/etc/harga-toko/worker.env
++ExecStart=/usr/local/bin/harga-toko-worker
++Restart=always
++RestartSec=5
++# Stopping puts a job in progress back in the queue (SIGTERM is handled).
++TimeoutStopSec=30
++NoNewPrivileges=true
++ProtectSystem=strict
++ProtectHome=true
++PrivateTmp=true
++
++[Install]
++WantedBy=multi-user.target
+diff --git a/worker/go.mod b/worker/go.mod
+index bec1222..45fd2ba 100644
+--- a/worker/go.mod
++++ b/worker/go.mod
+@@ -1,3 +1,5 @@
+ module listproduk/worker
+ 
+ go 1.27.1
++
++require github.com/jackc/pgx/v5 v5.11.0
+diff --git a/worker/internal/testdb/testdb.go b/worker/internal/testdb/testdb.go
+new file mode 100644
+index 0000000..afc6b43
+--- /dev/null
++++ b/worker/internal/testdb/testdb.go
+@@ -0,0 +1,99 @@
++// Package testdb gives tests a Postgres database with the app's server schema.
++//
++// Set TEST_DATABASE_URL to run them; without it the database tests are
++// skipped. Two ways:
++//
++//   - Local Supabase (`supabase start` in the repo root, migrations applied):
++//     TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:54322/postgres
++//   - Any plain Postgres 15+: the schema is applied on first use, with small
++//     stand-ins for Supabase's auth and storage schemas.
++//
++// Tests empty the tables they use. Never point this at the real project.
++package testdb
++
++import (
++	"context"
++	"os"
++	"path/filepath"
++	"runtime"
++	"testing"
++
++	"github.com/jackc/pgx/v5"
++	"github.com/jackc/pgx/v5/pgxpool"
++)
++
++// Stand-ins for what Supabase provides, only as much as 0001_init.sql needs.
++const supabaseStubs = `
++create schema if not exists auth;
++create table if not exists auth.users (id uuid primary key);
++create or replace function auth.uid() returns uuid language sql stable as
++  $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
++create schema if not exists storage;
++create table if not exists storage.objects (
++  id uuid primary key default gen_random_uuid(), bucket_id text, name text);
++create or replace function storage.foldername(name text) returns text[]
++  language sql immutable as
++  $$ select (string_to_array(name, '/'))[1:array_length(string_to_array(name, '/'), 1) - 1] $$;
++`
++
++// Open connects, applies the schema if it is missing, and empties the tables.
++func Open(t *testing.T) *pgxpool.Pool {
++	t.Helper()
++	url := os.Getenv("TEST_DATABASE_URL")
++	if url == "" {
++		t.Skip("TEST_DATABASE_URL not set; skipping database test")
++	}
++	ctx := context.Background()
++	cfg, err := pgxpool.ParseConfig(url)
++	if err != nil {
++		t.Fatal(err)
++	}
++	// Same mode as the worker uses in production.
++	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
++	pool, err := pgxpool.NewWithConfig(ctx, cfg)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(pool.Close)
++
++	var exists bool
++	if err := pool.QueryRow(ctx,
++		`select to_regclass('public.extraction_jobs') is not null`).Scan(&exists); err != nil {
++		t.Fatal(err)
++	}
++	if !exists {
++		if _, err := pool.Exec(ctx, supabaseStubs); err != nil {
++			t.Fatalf("stubs: %v", err)
++		}
++		sql, err := os.ReadFile(migrationPath())
++		if err != nil {
++			t.Fatal(err)
++		}
++		if _, err := pool.Exec(ctx, string(sql)); err != nil {
++			t.Fatalf("migration: %v", err)
++		}
++	}
++	if _, err := pool.Exec(ctx,
++		`truncate extraction_jobs, invites, catalog_items, store_members, stores cascade`); err != nil {
++		t.Fatal(err)
++	}
++	return pool
++}
++
++// NewStore inserts a store and returns its id.
++func NewStore(t *testing.T, pool *pgxpool.Pool) string {
++	t.Helper()
++	var id string
++	if err := pool.QueryRow(context.Background(),
++		`insert into stores (name) values ('Toko Uji') returning id::text`).Scan(&id); err != nil {
++		t.Fatal(err)
++	}
++	return id
++}
++
++func migrationPath() string {
++	_, file, _, _ := runtime.Caller(0)
++	// worker/internal/testdb -> repo root
++	root := filepath.Join(filepath.Dir(file), "..", "..", "..")
++	return filepath.Join(root, "supabase", "migrations", "0001_init.sql")
++}
+diff --git a/worker/job/runner.go b/worker/job/runner.go
+new file mode 100644
+index 0000000..527e0db
+--- /dev/null
++++ b/worker/job/runner.go
+@@ -0,0 +1,165 @@
++// Package job runs one extraction job at a time: claim it from the queue,
++// download its pages, extract, store the result, delete the pages.
++//
++// The PO photos only live on the server while they are being read. They are
++// deleted as soon as a job is done, and also when it has failed for good.
++package job
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"log/slog"
++	"time"
++
++	"listproduk/worker/extractor"
++)
++
++// MaxAttempts is how often a job is tried before it is marked failed.
++const MaxAttempts = 3
++
++// Job is a claimed extraction job.
++type Job struct {
++	ID        string
++	StoreID   string
++	PagePaths []string // paths in the 'po-images' bucket, in page order
++	Attempts  int      // including the current one
++}
++
++// Queue is the extraction_jobs table (see package queue).
++type Queue interface {
++	// Claim takes the oldest pending job, or returns nil when there is none.
++	Claim(ctx context.Context, workerID string) (*Job, error)
++	Complete(ctx context.Context, id string, result []byte) error
++	// Fail records the error. With retry the job goes back to pending,
++	// otherwise it is failed for good.
++	Fail(ctx context.Context, id string, msg string, retry bool) error
++	// Release puts a job back without counting the attempt (shutdown).
++	Release(ctx context.Context, id string) error
++}
++
++// Images is the 'po-images' bucket (see package storage).
++type Images interface {
++	Download(ctx context.Context, path string) ([]byte, error)
++	Delete(ctx context.Context, paths []string) error
++}
++
++// ErrPermanent marks failures that a retry cannot fix (a page that no longer
++// exists). Such jobs fail at once instead of after MaxAttempts tries.
++var ErrPermanent = errors.New("permanent")
++
++// Runner processes jobs. One Runner handles one job at a time; run several
++// workers for more throughput, the queue hands each job to only one of them.
++type Runner struct {
++	Queue     Queue
++	Images    Images
++	Extractor extractor.Extractor
++	WorkerID  string
++	// JobTimeout bounds downloading and extracting one job. Zero = no limit.
++	JobTimeout time.Duration
++	Log        *slog.Logger
++}
++
++func (r *Runner) logger() *slog.Logger {
++	if r.Log != nil {
++		return r.Log
++	}
++	return slog.Default()
++}
++
++// ProcessOne handles the next pending job. It reports whether there was one,
++// so the caller knows to ask again at once rather than wait. The returned
++// error is about the queue itself; a job that fails is recorded on the job.
++func (r *Runner) ProcessOne(ctx context.Context) (bool, error) {
++	j, err := r.Queue.Claim(ctx, r.WorkerID)
++	if err != nil {
++		return false, fmt.Errorf("claim: %w", err)
++	}
++	if j == nil {
++		return false, nil
++	}
++	log := r.logger().With("job", j.ID, "attempt", j.Attempts, "pages", len(j.PagePaths))
++	log.Info("job claimed")
++
++	result, procErr := r.process(ctx, j)
++
++	// Stopping (Ctrl+C, deploy) is not the job's fault: put it back as it was.
++	// The context is cancelled, so the queue call gets a fresh one.
++	if ctx.Err() != nil {
++		bg, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++		defer cancel()
++		if err := r.Queue.Release(bg, j.ID); err != nil {
++			return true, fmt.Errorf("release on shutdown: %w", err)
++		}
++		log.Info("job released on shutdown")
++		return true, nil
++	}
++
++	if procErr == nil {
++		if err := r.Queue.Complete(ctx, j.ID, result); err != nil {
++			return true, fmt.Errorf("complete: %w", err)
++		}
++		r.deletePages(ctx, log, j)
++		log.Info("job done")
++		return true, nil
++	}
++
++	final := j.Attempts >= MaxAttempts || errors.Is(procErr, ErrPermanent)
++	if err := r.Queue.Fail(ctx, j.ID, procErr.Error(), !final); err != nil {
++		return true, fmt.Errorf("fail: %w", err)
++	}
++	if final {
++		r.deletePages(ctx, log, j)
++		log.Warn("job failed for good", "err", procErr)
++	} else {
++		log.Warn("job failed, will retry", "err", procErr)
++	}
++	return true, nil
++}
++
++// process downloads the pages and extracts. The result is validated JSON.
++func (r *Runner) process(ctx context.Context, j *Job) ([]byte, error) {
++	if r.JobTimeout > 0 {
++		var cancel context.CancelFunc
++		ctx, cancel = context.WithTimeout(ctx, r.JobTimeout)
++		defer cancel()
++	}
++	if len(j.PagePaths) == 0 {
++		return nil, fmt.Errorf("job has no pages: %w", ErrPermanent)
++	}
++	pages := make([][]byte, 0, len(j.PagePaths))
++	for _, p := range j.PagePaths {
++		b, err := r.Images.Download(ctx, p)
++		if err != nil {
++			return nil, fmt.Errorf("download %s: %w", p, err)
++		}
++		pages = append(pages, b)
++	}
++	res, err := r.Extractor.Extract(ctx, pages)
++	if err != nil {
++		return nil, fmt.Errorf("extract: %w", err)
++	}
++	// Model output is untrusted; the phone should never get a broken result.
++	if err := res.Validate(); err != nil {
++		return nil, fmt.Errorf("invalid result: %w", err)
++	}
++	b, err := json.Marshal(res)
++	if err != nil {
++		return nil, fmt.Errorf("encode result: %w", err)
++	}
++	return b, nil
++}
++
++// DeletePages removes a job's photos. Exported for the stale-job sweep.
++func DeletePages(ctx context.Context, images Images, log *slog.Logger, paths []string) {
++	if err := images.Delete(ctx, paths); err != nil {
++		log.Error("could not delete pages", "paths", paths, "err", err)
++	}
++}
++
++// deletePages: a failure is only logged. The result is already stored, and
++// the owner's phone keeps its own copy of the photos.
++func (r *Runner) deletePages(ctx context.Context, log *slog.Logger, j *Job) {
++	DeletePages(ctx, r.Images, log, j.PagePaths)
++}
+diff --git a/worker/main.go b/worker/main.go
+new file mode 100644
+index 0000000..2b42702
+--- /dev/null
++++ b/worker/main.go
+@@ -0,0 +1,222 @@
++// Command worker reads PO photos into the extraction JSON (build guide
++// section 9). It polls the extraction_jobs table, so it needs no inbound port:
++// run it on a laptop, a small VPS, or the Ubuntu server.
++//
++// Configuration (environment variables, e.g. from an env file; never commit it):
++//
++//	DATABASE_URL          Postgres connection string of the Supabase project
++//	                      (Project Settings > Database > Session pooler).
++//	SUPABASE_URL          https://<project>.supabase.co
++//	SUPABASE_SERVICE_KEY  service_role / secret key. Worker only, never the app.
++//	EXTRACTOR             fake (default), later ollama or cloud
++//	POLL_INTERVAL         how often to look for work when idle (default 3s)
++//	JOB_TIMEOUT           limit for one job (default 3m)
++//	WORKER_ID             name in locked_by (default hostname-pid)
++package main
++
++import (
++	"context"
++	"fmt"
++	"log/slog"
++	"os"
++	"os/signal"
++	"syscall"
++	"time"
++
++	"github.com/jackc/pgx/v5"
++	"github.com/jackc/pgx/v5/pgxpool"
++
++	"listproduk/worker/extractor"
++	"listproduk/worker/job"
++	"listproduk/worker/queue"
++	"listproduk/worker/storage"
++)
++
++const (
++	// A job still 'running' after this long belongs to a worker that died.
++	staleAfter = 15 * time.Minute
++	// Results the phone never fetched are deleted after this long.
++	keepResults = 14 * 24 * time.Hour
++)
++
++type config struct {
++	databaseURL  string
++	supabaseURL  string
++	serviceKey   string
++	extractor    string
++	pollInterval time.Duration
++	jobTimeout   time.Duration
++	workerID     string
++}
++
++func loadConfig() (config, error) {
++	c := config{
++		databaseURL: os.Getenv("DATABASE_URL"),
++		supabaseURL: os.Getenv("SUPABASE_URL"),
++		serviceKey:  os.Getenv("SUPABASE_SERVICE_KEY"),
++		extractor:   os.Getenv("EXTRACTOR"),
++		workerID:    os.Getenv("WORKER_ID"),
++	}
++	var missing []string
++	for _, kv := range [][2]string{
++		{"DATABASE_URL", c.databaseURL},
++		{"SUPABASE_URL", c.supabaseURL},
++		{"SUPABASE_SERVICE_KEY", c.serviceKey},
++	} {
++		if kv[1] == "" {
++			missing = append(missing, kv[0])
++		}
++	}
++	if len(missing) > 0 {
++		return c, fmt.Errorf("missing environment variables: %v", missing)
++	}
++	var err error
++	if c.pollInterval, err = durationEnv("POLL_INTERVAL", 3*time.Second); err != nil {
++		return c, err
++	}
++	if c.jobTimeout, err = durationEnv("JOB_TIMEOUT", 3*time.Minute); err != nil {
++		return c, err
++	}
++	if c.extractor == "" {
++		c.extractor = "fake"
++	}
++	if c.workerID == "" {
++		host, _ := os.Hostname()
++		c.workerID = fmt.Sprintf("%s-%d", host, os.Getpid())
++	}
++	return c, nil
++}
++
++func durationEnv(name string, def time.Duration) (time.Duration, error) {
++	v := os.Getenv(name)
++	if v == "" {
++		return def, nil
++	}
++	d, err := time.ParseDuration(v)
++	if err != nil {
++		return 0, fmt.Errorf("%s: %w", name, err)
++	}
++	return d, nil
++}
++
++func main() {
++	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
++	if err := run(log); err != nil {
++		log.Error("worker stopped", "err", err)
++		os.Exit(1)
++	}
++}
++
++func run(log *slog.Logger) error {
++	cfg, err := loadConfig()
++	if err != nil {
++		return err
++	}
++	ext, err := extractor.New(cfg.extractor)
++	if err != nil {
++		return err
++	}
++
++	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
++	defer stop()
++
++	poolCfg, err := pgxpool.ParseConfig(cfg.databaseURL)
++	if err != nil {
++		return fmt.Errorf("DATABASE_URL: %w", err)
++	}
++	// Simple protocol works through every Supabase pooler mode, including the
++	// transaction pooler, which does not keep prepared statements.
++	poolCfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
++	poolCfg.MaxConns = 2
++	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
++	if err != nil {
++		return err
++	}
++	defer pool.Close()
++	if err := pool.Ping(ctx); err != nil {
++		return fmt.Errorf("database: %w", err)
++	}
++
++	q := queue.New(pool)
++	images := storage.New(cfg.supabaseURL, cfg.serviceKey, "po-images")
++	runner := &job.Runner{
++		Queue:      q,
++		Images:     images,
++		Extractor:  ext,
++		WorkerID:   cfg.workerID,
++		JobTimeout: cfg.jobTimeout,
++		Log:        log,
++	}
++	log.Info("worker started", "id", cfg.workerID, "extractor", cfg.extractor, "poll", cfg.pollInterval)
++
++	maintain := func() {
++		stale, err := q.RecoverStale(ctx, staleAfter)
++		if err != nil {
++			log.Error("recover stale jobs", "err", err)
++		}
++		for _, s := range stale {
++			log.Warn("took back stale job", "job", s.ID, "failed", s.Failed)
++			if s.Failed {
++				job.DeletePages(ctx, images, log, s.PagePaths)
++			}
++		}
++	}
++	cleanup := func() {
++		n, err := q.Cleanup(ctx, keepResults)
++		if err != nil {
++			log.Error("cleanup", "err", err)
++		} else if n > 0 {
++			log.Info("cleanup", "deleted_jobs", n)
++		}
++	}
++	maintain()
++	cleanup()
++	lastMaintain, lastCleanup := time.Now(), time.Now()
++
++	backoff := cfg.pollInterval
++	for {
++		if time.Since(lastMaintain) > time.Minute {
++			maintain()
++			lastMaintain = time.Now()
++		}
++		if time.Since(lastCleanup) > 24*time.Hour {
++			cleanup()
++			lastCleanup = time.Now()
++		}
++		worked, err := runner.ProcessOne(ctx)
++		if ctx.Err() != nil {
++			log.Info("worker stopping")
++			return nil
++		}
++		switch {
++		case err != nil:
++			// Database trouble: wait longer each time, up to a minute.
++			backoff = min(backoff*2, time.Minute)
++			log.Error("queue", "err", err, "retry_in", backoff)
++			if !sleep(ctx, backoff) {
++				log.Info("worker stopping")
++				return nil
++			}
++		case worked:
++			backoff = cfg.pollInterval // more work may be waiting: no pause
++		default:
++			backoff = cfg.pollInterval
++			if !sleep(ctx, cfg.pollInterval) {
++				log.Info("worker stopping")
++				return nil
++			}
++		}
++	}
++}
++
++// sleep waits d, or returns false at once when ctx is cancelled.
++func sleep(ctx context.Context, d time.Duration) bool {
++	t := time.NewTimer(d)
++	defer t.Stop()
++	select {
++	case <-ctx.Done():
++		return false
++	case <-t.C:
++		return true
++	}
++}
+diff --git a/worker/queue/queue.go b/worker/queue/queue.go
+new file mode 100644
+index 0000000..be559ba
+--- /dev/null
++++ b/worker/queue/queue.go
+@@ -0,0 +1,157 @@
++// Package queue is the extraction_jobs table as a work queue.
++//
++// Jobs are claimed with FOR UPDATE SKIP LOCKED inside a single UPDATE, so
++// several workers can run at once and each job goes to exactly one of them.
++// The worker connects as the database owner (service role), which bypasses
++// row level security; the phone only ever reads its own jobs.
++package queue
++
++import (
++	"context"
++	"errors"
++	"strings"
++	"time"
++
++	"github.com/jackc/pgx/v5"
++	"github.com/jackc/pgx/v5/pgconn"
++
++	"listproduk/worker/job"
++)
++
++// DB is what the queue needs from a connection or pool (*pgxpool.Pool fits).
++type DB interface {
++	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
++	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
++	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
++}
++
++type Queue struct {
++	db DB
++}
++
++func New(db DB) *Queue { return &Queue{db: db} }
++
++var _ job.Queue = (*Queue)(nil)
++
++// Claim takes the oldest pending job and counts the attempt. Counting at
++// claim time means a worker that crashes mid-job still uses up a try.
++func (q *Queue) Claim(ctx context.Context, workerID string) (*job.Job, error) {
++	var j job.Job
++	err := q.db.QueryRow(ctx, `
++		UPDATE extraction_jobs j
++		   SET status = 'running', locked_by = $1, locked_at = now(),
++		       attempts = j.attempts + 1
++		 WHERE j.id = (SELECT id FROM extraction_jobs
++		                WHERE status = 'pending'
++		                ORDER BY created_at, id
++		                LIMIT 1
++		                FOR UPDATE SKIP LOCKED)
++		RETURNING j.id::text, j.store_id::text, j.page_paths, j.attempts`,
++		workerID,
++	).Scan(&j.ID, &j.StoreID, &j.PagePaths, &j.Attempts)
++	if errors.Is(err, pgx.ErrNoRows) {
++		return nil, nil
++	}
++	if err != nil {
++		return nil, err
++	}
++	return &j, nil
++}
++
++// Complete stores the result for the owner's phone to fetch.
++func (q *Queue) Complete(ctx context.Context, id string, result []byte) error {
++	// The result goes as text and is cast in SQL, so it works over both the
++	// extended and the simple protocol (Supabase's transaction pooler).
++	_, err := q.db.Exec(ctx, `
++		UPDATE extraction_jobs
++		   SET status = 'done', result = $2::jsonb, finished_at = now(),
++		       last_error = NULL, locked_by = NULL, locked_at = NULL
++		 WHERE id = $1::uuid AND status = 'running'`,
++		id, string(result),
++	)
++	return err
++}
++
++// Fail records msg. With retry the job goes back to pending; otherwise it is
++// failed for good and the phone shows it as "Gagal".
++func (q *Queue) Fail(ctx context.Context, id string, msg string, retry bool) error {
++	_, err := q.db.Exec(ctx, `
++		UPDATE extraction_jobs
++		   SET status = (CASE WHEN $3::boolean THEN 'pending' ELSE 'failed' END)::job_status,
++		       last_error = $2,
++		       finished_at = CASE WHEN $3::boolean THEN NULL ELSE now() END,
++		       locked_by = NULL, locked_at = NULL
++		 WHERE id = $1::uuid AND status = 'running'`,
++		id, truncate(msg, 1000), retry,
++	)
++	return err
++}
++
++// Release puts a running job back to pending without counting the attempt.
++func (q *Queue) Release(ctx context.Context, id string) error {
++	_, err := q.db.Exec(ctx, `
++		UPDATE extraction_jobs
++		   SET status = 'pending', attempts = greatest(attempts - 1, 0),
++		       locked_by = NULL, locked_at = NULL
++		 WHERE id = $1::uuid AND status = 'running'`,
++		id,
++	)
++	return err
++}
++
++// Stale is a job taken back from a worker that stopped without finishing.
++type Stale struct {
++	ID        string
++	PagePaths []string
++	Failed    bool // out of attempts: its pages should be deleted
++}
++
++// RecoverStale handles jobs left 'running' for longer than olderThan (the
++// worker died or lost its connection): back to pending, or failed when out
++// of attempts.
++func (q *Queue) RecoverStale(ctx context.Context, olderThan time.Duration) ([]Stale, error) {
++	rows, err := q.db.Query(ctx, `
++		UPDATE extraction_jobs
++		   SET status = (CASE WHEN attempts >= $2::int THEN 'failed' ELSE 'pending' END)::job_status,
++		       last_error = 'worker stopped while reading this job',
++		       finished_at = CASE WHEN attempts >= $2::int THEN now() END,
++		       locked_by = NULL, locked_at = NULL
++		 WHERE status = 'running'
++		   AND locked_at < now() - make_interval(secs => $1::float8)
++		RETURNING id::text, page_paths, status = 'failed'`,
++		olderThan.Seconds(), job.MaxAttempts,
++	)
++	if err != nil {
++		return nil, err
++	}
++	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Stale, error) {
++		var s Stale
++		err := r.Scan(&s.ID, &s.PagePaths, &s.Failed)
++		return s, err
++	})
++}
++
++// Cleanup deletes jobs whose result the phone has fetched, and any job that
++// finished more than keepFor ago. Their pages are already gone. Returns the
++// number of deleted jobs.
++func (q *Queue) Cleanup(ctx context.Context, keepFor time.Duration) (int64, error) {
++	tag, err := q.db.Exec(ctx, `
++		DELETE FROM extraction_jobs
++		 WHERE fetched_at IS NOT NULL
++		    OR finished_at < now() - make_interval(secs => $1::float8)`,
++		keepFor.Seconds(),
++	)
++	if err != nil {
++		return 0, err
++	}
++	return tag.RowsAffected(), nil
++}
++
++// truncate cuts s to at most n bytes without splitting a character
++// (Postgres rejects invalid UTF-8).
++func truncate(s string, n int) string {
++	if len(s) <= n {
++		return s
++	}
++	return strings.ToValidUTF8(s[:n], "")
++}
+diff --git a/worker/queue/queue_test.go b/worker/queue/queue_test.go
+new file mode 100644
+index 0000000..f5fadc9
+--- /dev/null
++++ b/worker/queue/queue_test.go
+@@ -0,0 +1,469 @@
++package queue_test
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/jackc/pgx/v5/pgxpool"
++
++	"listproduk/worker/extractor"
++	"listproduk/worker/internal/testdb"
++	"listproduk/worker/job"
++	"listproduk/worker/queue"
++)
++
++// submit queues a job the way the phone does (submit_extraction inserts it).
++func submit(t *testing.T, pool *pgxpool.Pool, store string, paths ...string) string {
++	t.Helper()
++	var id string
++	err := pool.QueryRow(context.Background(), `
++		insert into extraction_jobs (store_id, page_paths)
++		values ($1::uuid, $2::text[]) returning id::text`, store, paths).Scan(&id)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return id
++}
++
++type row struct {
++	status, lastError, result string
++	attempts                  int
++	finished, locked          bool
++}
++
++func get(t *testing.T, pool *pgxpool.Pool, id string) row {
++	t.Helper()
++	var r row
++	err := pool.QueryRow(context.Background(), `
++		select status::text, coalesce(last_error, ''), coalesce(result::text, ''),
++		       attempts, finished_at is not null, locked_by is not null
++		  from extraction_jobs where id = $1::uuid`, id).
++		Scan(&r.status, &r.lastError, &r.result, &r.attempts, &r.finished, &r.locked)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return r
++}
++
++// memImages is the bucket in memory.
++type memImages struct {
++	mu      sync.Mutex
++	objects map[string][]byte
++	deleted []string
++}
++
++func newImages(paths ...string) *memImages {
++	m := &memImages{objects: map[string][]byte{}}
++	for _, p := range paths {
++		m.objects[p] = []byte("jpeg " + p)
++	}
++	return m
++}
++
++func (m *memImages) Download(_ context.Context, p string) ([]byte, error) {
++	m.mu.Lock()
++	defer m.mu.Unlock()
++	b, ok := m.objects[p]
++	if !ok {
++		return nil, fmt.Errorf("%s: %w", p, job.ErrPermanent)
++	}
++	return b, nil
++}
++
++func (m *memImages) Delete(_ context.Context, paths []string) error {
++	m.mu.Lock()
++	defer m.mu.Unlock()
++	for _, p := range paths {
++		delete(m.objects, p)
++		m.deleted = append(m.deleted, p)
++	}
++	return nil
++}
++
++type failingExtractor struct{ err error }
++
++func (f failingExtractor) Extract(context.Context, [][]byte) (extractor.Result, error) {
++	return extractor.Result{}, f.err
++}
++
++func runner(pool *pgxpool.Pool, images job.Images, ext extractor.Extractor) *job.Runner {
++	return &job.Runner{
++		Queue:     queue.New(pool),
++		Images:    images,
++		Extractor: ext,
++		WorkerID:  "test-worker",
++	}
++}
++
++func TestClaimTakesOldestPendingAndCountsTheAttempt(t *testing.T) {
++	pool := testdb.Open(t)
++	store := testdb.NewStore(t, pool)
++	first := submit(t, pool, store, store+"/po1/1.jpg", store+"/po1/2.jpg")
++	submit(t, pool, store, store+"/po2/1.jpg")
++	q := queue.New(pool)
++	ctx := context.Background()
++
++	j, err := q.Claim(ctx, "w1")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if j.ID != first || j.StoreID != store || j.Attempts != 1 {
++		t.Fatalf("claimed %+v, want first job with attempt 1", j)
++	}
++	if len(j.PagePaths) != 2 || j.PagePaths[1] != store+"/po1/2.jpg" {
++		t.Fatalf("pages out of order: %v", j.PagePaths)
++	}
++	if r := get(t, pool, first); r.status != "running" || !r.locked {
++		t.Fatalf("after claim: %+v", r)
++	}
++}
++
++func TestClaimReturnsNilWhenNothingIsPending(t *testing.T) {
++	pool := testdb.Open(t)
++	j, err := queue.New(pool).Claim(context.Background(), "w1")
++	if err != nil || j != nil {
++		t.Fatalf("got %v, %v; want nil, nil", j, err)
++	}
++}
++
++func TestConcurrentWorkersNeverGetTheSameJob(t *testing.T) {
++	pool := testdb.Open(t)
++	store := testdb.NewStore(t, pool)
++	const jobs = 20
++	for i := 0; i < jobs; i++ {
++		submit(t, pool, store, fmt.Sprintf("%s/po%d/1.jpg", store, i))
++	}
++	q := queue.New(pool)
++
++	var mu sync.Mutex
++	seen := map[string]string{}
++	var wg sync.WaitGroup
++	for w := 0; w < 5; w++ {
++		wg.Add(1)
++		go func(worker string) {
++			defer wg.Done()
++			for {
++				j, err := q.Claim(context.Background(), worker)
++				if err != nil {
++					t.Error(err)
++					return
++				}
++				if j == nil {
++					return
++				}
++				mu.Lock()
++				if other, dup := seen[j.ID]; dup {
++					t.Errorf("job %s claimed by %s and %s", j.ID, other, worker)
++				}
++				seen[j.ID] = worker
++				mu.Unlock()
++			}
++		}(fmt.Sprintf("w%d", w))
++	}
++	wg.Wait()
++	if len(seen) != jobs {
++		t.Fatalf("claimed %d jobs, want %d", len(seen), jobs)
++	}
++}
++
++func TestRunnerDoneStoresResultAndDeletesPages(t *testing.T) {
++	pool := testdb.Open(t)
++	store := testdb.NewStore(t, pool)
++	paths := []string{store + "/po1/1.jpg", store + "/po1/2.jpg"}
++	id := submit(t, pool, store, paths...)
++	images := newImages(paths...)
++
++	worked, err := runner(pool, images, extractor.NewFake()).ProcessOne(context.Background())
++	if err != nil || !worked {
++		t.Fatalf("worked=%v err=%v", worked, err)
++	}
++	r := get(t, pool, id)
++	if r.status != "done" || !r.finished || r.locked {
++		t.Fatalf("after done: %+v", r)
++	}
++	var res extractor.Result
++	if err := json.Unmarshal([]byte(r.result), &res); err != nil {
++		t.Fatal(err)
++	}
++	if *res.Supplier.Name != "CV Maju Elektrik" || len(res.Lines) == 0 {
++		t.Fatalf("unexpected result: %+v", res)
++	}
++	if len(images.objects) != 0 {
++		t.Fatalf("pages left in the bucket: %v", images.objects)
++	}
++}
++
++func TestRunnerRetriesThenFailsAfterThreeAttempts(t *testing.T) {
++	pool := testdb.Open(t)
++	store := testdb.NewStore(t, pool)
++	path := store + "/po1/1.jpg"
++	id := submit(t, pool, store, path)
++	images := newImages(path)
++	r := runner(pool, images, failingExtractor{errors.New("model busy")})
++	ctx := context.Background()
++
++	for attempt := 1; attempt <= 2; attempt++ {
++		if _, err := r.ProcessOne(ctx); err != nil {
++			t.Fatal(err)
++		}
++		got := get(t, pool, id)
++		if got.status != "pending" || got.attempts != attempt || got.lastError == "" {
++			t.Fatalf("after attempt %d: %+v", attempt, got)
++		}
++		if len(images.deleted) != 0 {
++			t.Fatal("pages deleted before the last attempt")
++		}
++	}
++	if _, err := r.ProcessOne(ctx); err != nil {
++		t.Fatal(err)
++	}
++	got := get(t, pool, id)
++	if got.status != "failed" || got.attempts != 3 || !got.finished {
++		t.Fatalf("after attempt 3: %+v", got)
++	}
++	if len(images.deleted) != 1 {
++		t.Fatalf("pages should be deleted when failed for good: %v", images.deleted)
++	}
++}
++
++func TestRunnerFailsAtOnceWhenAPageIsMissing(t *testing.T) {
++	pool := testdb.Open(t)
++	store := testdb.NewStore(t, pool)
++	id := submit(t, pool, store, store+"/po1/1.jpg", store+"/po1/2.jpg")
++	images := newImages(store + "/po1/1.jpg") // page 2 never uploaded
++
++	if _, err := runner(pool, images, extractor.NewFake()).ProcessOne(context.Background()); err != nil {
++		t.Fatal(err)
++	}
++	if got := get(t, pool, id); got.status != "failed" || got.attempts != 1 {
++		t.Fatalf("missing page: %+v", got)
++	}
++}
++
++// invalidExtractor returns output that breaks the contract.
++type invalidExtractor struct{}
++
++func (invalidExtractor) Extract(context.Context, [][]byte) (extractor.Result, error) {
++	bad := int64(-5)
++	return extractor.Result{Lines: []extractor.Line{{Name: "X", UnitPrice: &bad}}}, nil
++}
++
++func TestRunnerNeverStoresAnInvalidResult(t *testing.T) {
++	pool := testdb.Open(t)
++	store := testdb.NewStore(t, pool)
++	path := store + "/po1/1.jpg"
++	id := submit(t, pool, store, path)
++
++	if _, err := runner(pool, newImages(path), invalidExtractor{}).ProcessOne(context.Background()); err != nil {
++		t.Fatal(err)
++	}
++	got := get(t, pool, id)
++	if got.status != "pending" || got.result != "" {
++		t.Fatalf("invalid result must not be stored: %+v", got)
++	}
++}
++
++// blockingExtractor waits until the context is cancelled (a shutdown).
++type blockingExtractor struct{ started chan struct{} }
++
++func (b blockingExtractor) Extract(ctx context.Context, _ [][]byte) (extractor.Result, error) {
++	close(b.started)
++	<-ctx.Done()
++	return extractor.Result{}, ctx.Err()
++}
++
++func TestShutdownPutsTheJobBackWithoutUsingAnAttempt(t *testing.T) {
++	pool := testdb.Open(t)
++	store := testdb.NewStore(t, pool)
++	path := store + "/po1/1.jpg"
++	id := submit(t, pool, store, path)
++	images := newImages(path)
++	ext := blockingExtractor{started: make(chan struct{})}
++
++	ctx, cancel := context.WithCancel(context.Background())
++	done := make(chan error)
++	go func() {
++		_, err := runner(pool, images, ext).ProcessOne(ctx)
++		done <- err
++	}()
++	<-ext.started
++	cancel()
++	if err := <-done; err != nil {
++		t.Fatal(err)
++	}
++	got := get(t, pool, id)
++	if got.status != "pending" || got.attempts != 0 || got.locked {
++		t.Fatalf("after shutdown: %+v", got)
++	}
++	if len(images.deleted) != 0 {
++		t.Fatal("pages must stay for the next try")
++	}
++}
++
++func TestRecoverStale(t *testing.T) {
++	pool := testdb.Open(t)
++	store := testdb.NewStore(t, pool)
++	ctx := context.Background()
++	retry := submit(t, pool, store, store+"/a/1.jpg")
++	outOfTries := submit(t, pool, store, store+"/b/1.jpg")
++	fresh := submit(t, pool, store, store+"/c/1.jpg")
++	_, err := pool.Exec(ctx, `
++		update extraction_jobs set status = 'running', locked_by = 'dead',
++		       locked_at = now() - interval '1 hour',
++		       attempts = case when id = $2::uuid then 3 else 1 end
++		 where id in ($1::uuid, $2::uuid);
++		`, retry, outOfTries)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err := pool.Exec(ctx, `update extraction_jobs set status = 'running',
++		locked_at = now() where id = $1::uuid`, fresh); err != nil {
++		t.Fatal(err)
++	}
++
++	stale, err := queue.New(pool).RecoverStale(ctx, 15*time.Minute)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(stale) != 2 {
++		t.Fatalf("recovered %d jobs, want 2: %+v", len(stale), stale)
++	}
++	if got := get(t, pool, retry); got.status != "pending" {
++		t.Fatalf("retry job: %+v", got)
++	}
++	if got := get(t, pool, outOfTries); got.status != "failed" || !got.finished {
++		t.Fatalf("job out of tries: %+v", got)
++	}
++	if got := get(t, pool, fresh); got.status != "running" {
++		t.Fatalf("a job still being worked on was taken: %+v", got)
++	}
++	for _, s := range stale {
++		if s.ID == outOfTries && !s.Failed {
++			t.Fatal("out-of-tries job should be reported failed (pages to delete)")
++		}
++	}
++}
++
++func TestCleanup(t *testing.T) {
++	pool := testdb.Open(t)
++	store := testdb.NewStore(t, pool)
++	ctx := context.Background()
++	fetched := submit(t, pool, store, "x")
++	old := submit(t, pool, store, "y")
++	recent := submit(t, pool, store, "z")
++	pending := submit(t, pool, store, "w")
++	_, err := pool.Exec(ctx, `
++		update extraction_jobs set status = 'done', finished_at = now(), fetched_at = now()
++		 where id = $1::uuid;`, fetched)
++	if err != nil {
++		t.Fatal(err)
++	}
++	_, err = pool.Exec(ctx, `
++		update extraction_jobs set status = 'done', finished_at = now() - interval '15 days'
++		 where id = $1::uuid;`, old)
++	if err != nil {
++		t.Fatal(err)
++	}
++	_, err = pool.Exec(ctx, `
++		update extraction_jobs set status = 'done', finished_at = now() - interval '2 days'
++		 where id = $1::uuid;`, recent)
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	n, err := queue.New(pool).Cleanup(ctx, 14*24*time.Hour)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if n != 2 {
++		t.Fatalf("deleted %d, want 2", n)
++	}
++	left := map[string]bool{}
++	rows, err := pool.Query(ctx, `select id::text from extraction_jobs`)
++	if err != nil {
++		t.Fatal(err)
++	}
++	for rows.Next() {
++		var id string
++		if err := rows.Scan(&id); err != nil {
++			t.Fatal(err)
++		}
++		left[id] = true
++	}
++	if len(left) != 2 || !left[recent] || !left[pending] {
++		t.Fatalf("left %v, want only the recent and the pending job", left)
++	}
++}
++
++// The whole round trip through the functions the phone calls, as the owner:
++// submit_extraction, the worker, reading the result, mark_extraction_fetched,
++// and the cleanup that then removes the job.
++func TestPhoneAndWorkerContract(t *testing.T) {
++	pool := testdb.Open(t)
++	ctx := context.Background()
++	conn, err := pool.Acquire(ctx)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer conn.Release()
++
++	// Sign in as the owner: auth.uid() reads this setting.
++	owner := "11111111-1111-4111-8111-111111111111"
++	if _, err := conn.Exec(ctx, `insert into auth.users (id) values ($1::uuid)
++		on conflict do nothing`, owner); err != nil {
++		t.Skip("not a plain Postgres with stub auth.users; skipping:", err)
++	}
++	if _, err := conn.Exec(ctx, `select set_config('request.jwt.claim.sub', $1, false)`, owner); err != nil {
++		t.Fatal(err)
++	}
++	defer conn.Exec(ctx, `select set_config('request.jwt.claim.sub', '', false)`)
++
++	var store, jobID string
++	if err := conn.QueryRow(ctx, `select create_store('Toko Uji')::text`).Scan(&store); err != nil {
++		t.Fatal(err)
++	}
++	paths := []string{store + "/po1/1.jpg"}
++	if err := conn.QueryRow(ctx, `select submit_extraction($1::uuid, $2::text[])::text`,
++		store, paths).Scan(&jobID); err != nil {
++		t.Fatal(err)
++	}
++
++	// A job without pages is refused by the server.
++	if _, err := conn.Exec(ctx, `select submit_extraction($1::uuid, '{}'::text[])`, store); err == nil {
++		t.Fatal("submit_extraction accepted a job without pages")
++	}
++
++	if _, err := runner(pool, newImages(paths...), extractor.NewFake()).ProcessOne(ctx); err != nil {
++		t.Fatal(err)
++	}
++
++	var status, result string
++	if err := conn.QueryRow(ctx, `select status::text, result::text from extraction_jobs
++		where id = $1::uuid`, jobID).Scan(&status, &result); err != nil {
++		t.Fatal(err)
++	}
++	if status != "done" || result == "" {
++		t.Fatalf("phone sees %s / %q", status, result)
++	}
++
++	if _, err := conn.Exec(ctx, `select mark_extraction_fetched($1::uuid)`, jobID); err != nil {
++		t.Fatal(err)
++	}
++	var cleared bool
++	if err := conn.QueryRow(ctx, `select result is null and fetched_at is not null
++		from extraction_jobs where id = $1::uuid`, jobID).Scan(&cleared); err != nil {
++		t.Fatal(err)
++	}
++	if !cleared {
++		t.Fatal("mark_extraction_fetched should clear the result")
++	}
++
++	if n, err := queue.New(pool).Cleanup(ctx, 14*24*time.Hour); err != nil || n != 1 {
++		t.Fatalf("cleanup deleted %d (%v), want the fetched job", n, err)
++	}
++}
+diff --git a/worker/storage/storage.go b/worker/storage/storage.go
+new file mode 100644
+index 0000000..962c1ec
+--- /dev/null
++++ b/worker/storage/storage.go
+@@ -0,0 +1,126 @@
++// Package storage reads and deletes PO photos in Supabase Storage with the
++// service key. Only the worker has that key; it never goes into the app.
++package storage
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"net/url"
++	"strings"
++	"time"
++
++	"listproduk/worker/job"
++)
++
++// Client talks to one bucket.
++type Client struct {
++	BaseURL string // https://<project>.supabase.co
++	Key     string // legacy service_role key, or a new sb_secret_... key
++	Bucket  string // "po-images"
++	HTTP    *http.Client
++}
++
++// New returns a client for bucket.
++func New(baseURL, key, bucket string) *Client {
++	return &Client{
++		BaseURL: strings.TrimRight(baseURL, "/"),
++		Key:     key,
++		Bucket:  bucket,
++		HTTP:    &http.Client{Timeout: 60 * time.Second},
++	}
++}
++
++func (c *Client) objectURL(path string) string {
++	parts := strings.Split(path, "/")
++	for i, p := range parts {
++		parts[i] = url.PathEscape(p)
++	}
++	return fmt.Sprintf("%s/storage/v1/object/%s/%s",
++		c.BaseURL, url.PathEscape(c.Bucket), strings.Join(parts, "/"))
++}
++
++func (c *Client) authorize(req *http.Request) {
++	req.Header.Set("apikey", c.Key)
++	// Legacy service_role keys are JWTs and also go in Authorization. The new
++	// sb_secret_ keys are not JWTs; the gateway only wants them in apikey.
++	if strings.HasPrefix(c.Key, "eyJ") {
++		req.Header.Set("Authorization", "Bearer "+c.Key)
++	}
++}
++
++// Download returns one object. A missing object wraps job.ErrPermanent:
++// retrying will not bring it back.
++func (c *Client) Download(ctx context.Context, path string) ([]byte, error) {
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.objectURL(path), nil)
++	if err != nil {
++		return nil, err
++	}
++	c.authorize(req)
++	resp, err := c.HTTP.Do(req)
++	if err != nil {
++		return nil, err
++	}
++	defer resp.Body.Close()
++	body, err := io.ReadAll(io.LimitReader(resp.Body, 50<<20))
++	if err != nil {
++		return nil, err
++	}
++	if resp.StatusCode == http.StatusOK {
++		return body, nil
++	}
++	if notFound(resp.StatusCode, body) {
++		return nil, fmt.Errorf("object %s not found: %w", path, job.ErrPermanent)
++	}
++	return nil, fmt.Errorf("storage download %s: %s: %s", path, resp.Status, snippet(body))
++}
++
++// Delete removes objects. Objects that are already gone are not an error.
++func (c *Client) Delete(ctx context.Context, paths []string) error {
++	if len(paths) == 0 {
++		return nil
++	}
++	payload, err := json.Marshal(map[string][]string{"prefixes": paths})
++	if err != nil {
++		return err
++	}
++	u := fmt.Sprintf("%s/storage/v1/object/%s", c.BaseURL, url.PathEscape(c.Bucket))
++	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, bytes.NewReader(payload))
++	if err != nil {
++		return err
++	}
++	c.authorize(req)
++	req.Header.Set("Content-Type", "application/json")
++	resp, err := c.HTTP.Do(req)
++	if err != nil {
++		return err
++	}
++	defer resp.Body.Close()
++	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
++	if resp.StatusCode >= 300 {
++		return fmt.Errorf("storage delete: %s: %s", resp.Status, snippet(body))
++	}
++	return nil
++}
++
++// Supabase Storage answers a missing object with 404, or with 400 and
++// "not_found" in the body, depending on the version.
++func notFound(status int, body []byte) bool {
++	if status == http.StatusNotFound {
++		return true
++	}
++	b := strings.ToLower(string(body))
++	return status == http.StatusBadRequest &&
++		(strings.Contains(b, "not_found") || strings.Contains(b, "not found"))
++}
++
++func snippet(b []byte) string {
++	s := strings.TrimSpace(string(b))
++	if len(s) > 200 {
++		s = s[:200] + "…"
++	}
++	return s
++}
+diff --git a/worker/storage/storage_test.go b/worker/storage/storage_test.go
+new file mode 100644
+index 0000000..d31544e
+--- /dev/null
++++ b/worker/storage/storage_test.go
+@@ -0,0 +1,91 @@
++package storage
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++
++	"listproduk/worker/job"
++)
++
++func TestDownloadSendsKeyAndEscapesPath(t *testing.T) {
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.EscapedPath() != "/storage/v1/object/po-images/store/po%201/1.jpg" {
++			t.Errorf("path %q", r.URL.EscapedPath())
++		}
++		if r.Header.Get("apikey") != "sb_secret_x" || r.Header.Get("Authorization") != "" {
++			t.Errorf("headers %v", r.Header)
++		}
++		_, _ = w.Write([]byte("JPEG"))
++	}))
++	defer srv.Close()
++
++	b, err := New(srv.URL+"/", "sb_secret_x", "po-images").Download(context.Background(), "store/po 1/1.jpg")
++	if err != nil || string(b) != "JPEG" {
++		t.Fatalf("got %q, %v", b, err)
++	}
++}
++
++func TestLegacyJWTKeyAlsoGoesInAuthorization(t *testing.T) {
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.Header.Get("Authorization") != "Bearer eyJabc" {
++			t.Errorf("authorization %q", r.Header.Get("Authorization"))
++		}
++	}))
++	defer srv.Close()
++	_, _ = New(srv.URL, "eyJabc", "po-images").Download(context.Background(), "a.jpg")
++}
++
++func TestMissingObjectIsPermanent(t *testing.T) {
++	for _, tc := range []struct {
++		status int
++		body   string
++	}{
++		{404, `{"error":"not found"}`},
++		{400, `{"statusCode":"404","error":"not_found","message":"Object not found"}`},
++	} {
++		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++			w.WriteHeader(tc.status)
++			_, _ = w.Write([]byte(tc.body))
++		}))
++		_, err := New(srv.URL, "k", "po-images").Download(context.Background(), "a.jpg")
++		srv.Close()
++		if !errors.Is(err, job.ErrPermanent) {
++			t.Fatalf("%d: want ErrPermanent, got %v", tc.status, err)
++		}
++	}
++}
++
++func TestServerErrorIsRetryable(t *testing.T) {
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		w.WriteHeader(503)
++	}))
++	defer srv.Close()
++	_, err := New(srv.URL, "k", "po-images").Download(context.Background(), "a.jpg")
++	if err == nil || errors.Is(err, job.ErrPermanent) {
++		t.Fatalf("want a retryable error, got %v", err)
++	}
++}
++
++func TestDeleteSendsPrefixes(t *testing.T) {
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.Method != http.MethodDelete || r.URL.Path != "/storage/v1/object/po-images" {
++			t.Errorf("%s %s", r.Method, r.URL.Path)
++		}
++		body, _ := io.ReadAll(r.Body)
++		var got map[string][]string
++		_ = json.Unmarshal(body, &got)
++		if len(got["prefixes"]) != 2 || got["prefixes"][1] != "s/p/2.jpg" {
++			t.Errorf("body %s", body)
++		}
++		_, _ = w.Write([]byte("[]"))
++	}))
++	defer srv.Close()
++	if err := New(srv.URL, "k", "po-images").Delete(context.Background(), []string{"s/p/1.jpg", "s/p/2.jpg"}); err != nil {
++		t.Fatal(err)
++	}
++}
+-- 
+2.43.0
+
