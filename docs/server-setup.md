@@ -116,3 +116,65 @@ tests empty the tables.
 5. Supabase > Storage > po-images is empty again (photos are deleted after
    reading), and the job row disappears from extraction_jobs on the worker's
    next daily cleanup.
+
+---
+
+# Invite links (employees join by link or by code)
+
+The owner's invite message carries both a link and the 8-character code. The
+code always works. The link needs a small website, hosted for free on GitHub
+Pages; until it's published, invites simply carry the code only.
+
+## 9. Publish the invite site (once)
+
+1. On GitHub, create a new **public** repository named exactly
+   `miguelrolandjo-ops.github.io`. This exact name makes it your user site,
+   which can serve `/.well-known/` at the root, as Android requires.
+2. Get your app's SHA-256 fingerprint (PowerShell):
+   ```
+   cd app\android
+   .\gradlew signingReport
+   ```
+   Copy the **SHA-256** line under `Variant: debug` (`AA:BB:...`). Put it in
+   `invite-site/.well-known/assetlinks.json`. For the Play Store release, add the
+   **App signing key** SHA-256 from Play Console > Setup > App signing as a second
+   entry. Remove the placeholder lines you don't use.
+3. Copy everything in `invite-site/` (including `.nojekyll` and `.well-known`)
+   into that repository and push:
+   ```
+   git clone https://github.com/miguelrolandjo-ops/miguelrolandjo-ops.github.io
+   cd miguelrolandjo-ops.github.io
+   # copy the contents of list-produk/invite-site here, then:
+   git add -A
+   git commit -m "Invite site"
+   git push
+   ```
+4. Repository > **Settings > Pages**: Source "Deploy from a branch", branch
+   `main`, folder `/ (root)`. After a minute, both of these should open:
+   - https://miguelrolandjo-ops.github.io/j/?kode=TEST1234 (the invite page)
+   - https://miguelrolandjo-ops.github.io/.well-known/assetlinks.json
+
+## 10. Turn links on in the app
+
+- `app/config.json`: `"INVITE_LINK_BASE": "https://miguelrolandjo-ops.github.io/j/"`
+- `app/android/gradle.properties`: `inviteHost=miguelrolandjo-ops.github.io`
+  (already set; both must name the same host)
+
+Uninstall and reinstall the app: Android checks `assetlinks.json` at install
+time. Check with `adb shell pm get-app-links com.example.flutter_application_1`
+("verified"), or on the phone: Settings > Apps > Harga Toko > Open by default.
+
+**If you change `applicationId`**, also update `package_name` in
+`assetlinks.json` and `PACKAGE` in `invite-site/j/index.html`.
+
+## 11. Check
+
+1. Owner: Tim > Undang karyawan > Kirim lewat WhatsApp. The message has a link
+   and a code.
+2. New phone with the app installed: tap the link in WhatsApp. The app opens on
+   "Gabung sebagai karyawan" with the code filled in; type a name, tap Gabung.
+3. Not verified yet, or another browser: the link opens the invite page;
+   "Buka aplikasi Harga Toko" opens the app the same way.
+4. Phone without the app: the invite page shows the code and the install steps.
+5. A phone that is already an employee or the owner: the link only shows a
+   message and changes nothing.

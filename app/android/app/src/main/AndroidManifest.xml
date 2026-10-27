@@ -24,6 +24,11 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- Invite links are read by our own code (MainActivity.kt and
+                 lib/welcome/invite_link.dart), not by Flutter's router. -->
+            <meta-data
+              android:name="flutter_deeplinking_enabled"
+              android:value="false" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
@@ -39,6 +44,26 @@
                 <action android:name="android.intent.action.SEND_MULTIPLE"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <data android:mimeType="image/*"/>
+            </intent-filter>
+            <!-- Invite link: https://<inviteHost>/j/?kode=XXXXXXXX opens the app
+                 directly once the site's assetlinks.json is verified
+                 (docs/server-setup.md, "Invite links"). inviteHost is set in
+                 android/gradle.properties. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https"
+                      android:host="${inviteHost}"
+                      android:pathPrefix="/j"/>
+            </intent-filter>
+            <!-- The landing page's "Buka aplikasi" button, for phones where the
+                 https link opened in the browser instead. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="hargatoko" android:host="join"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

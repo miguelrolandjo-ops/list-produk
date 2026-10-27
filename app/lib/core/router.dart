@@ -54,7 +54,14 @@ final routerProvider = Provider<GoRouter>((ref) {
         redirectFor(ref.read(appModeProvider), state.matchedLocation),
     routes: [
       // First launch.
-      GoRoute(path: '/mulai', builder: (_, _) => const WelcomeScreen()),
+      GoRoute(
+        path: '/mulai',
+        builder: (_, state) {
+          // From an invite link: open the join form with the code filled in.
+          final code = state.uri.queryParameters['kode'];
+          return WelcomeScreen(key: ValueKey('welcome-$code'), initialCode: code);
+        },
+      ),
       GoRoute(path: '/mulai/toko', builder: (_, _) => const OnboardingScreen()),
 
       // Employee phones.

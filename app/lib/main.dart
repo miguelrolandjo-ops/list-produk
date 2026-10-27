@@ -18,6 +18,7 @@ import 'inbox/inbox_providers.dart';
 import 'inbox/po_intake_service.dart';
 import 'inbox/share_intake.dart';
 import 'onboarding/shop_profile.dart';
+import 'welcome/invite_link.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -64,12 +65,46 @@ class App extends ConsumerStatefulWidget {
 class _AppState extends ConsumerState<App> {
   final _messenger = GlobalKey<ScaffoldMessengerState>();
   final _share = ShareIntake();
+  final _invites = InviteLinkIntake();
 
   @override
   void initState() {
     super.initState();
     _share.listen(_takeShared);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _takeShared());
+    _invites.listen(_takeInvite);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _takeShared();
+      _takeInvite();
+    });
+  }
+
+  /// An invite link was tapped: on a new phone it opens "Gabung sebagai
+  /// karyawan" with the code filled in. It never joins by itself; the
+  /// employee still types a name and taps Gabung.
+  Future<void> _takeInvite() async {
+    final link = await _invites.take();
+    if (link == null || !mounted) return;
+    final code = InviteLink.codeFrom(link);
+    void say(String text) => _messenger.currentState?.showSnackBar(
+      SnackBar(content: Text(text), duration: const Duration(seconds: 6)),
+    );
+    if (code == null) {
+      say('Tautan undangan tidak lengkap. Minta kode undangan ke pemilik toko.');
+      return;
+    }
+    switch (ref.read(appModeProvider)) {
+      case null:
+        ref.read(routerProvider).go('/mulai?kode=$code');
+      case AppMode.employee:
+        say(
+          'HP ini sudah tergabung dengan toko. Untuk memakai undangan baru, '
+          'pilih Keluar dari toko di menu, lalu buka tautannya lagi.',
+        );
+      case AppMode.owner:
+        say(
+          'Ini HP pemilik toko. Buka tautan undangan di HP karyawan.',
+        );
+    }
   }
 
   /// Photos shared from WhatsApp and other apps become a PO in the Inbox.

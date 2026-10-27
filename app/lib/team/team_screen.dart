@@ -6,9 +6,11 @@ import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../core/server_api.dart';
+import '../core/server_config.dart';
 import '../core/server_providers.dart';
 import '../core/time_ago.dart';
 import '../core/ui.dart';
+import '../welcome/invite_link.dart';
 import 'owner_account_service.dart';
 
 class _TeamData {
@@ -229,6 +231,7 @@ class TeamScreen extends ConsumerWidget {
                           ShareParams(
                             text: TeamService.inviteMessage(
                               inv.code,
+                              link: _linkFor(inv.code),
                               storeName: ref
                                   .read(ownerLinkProvider)
                                   .value
@@ -320,6 +323,10 @@ class TeamScreen extends ConsumerWidget {
   }
 }
 
+/// The invite link for [code], or null without INVITE_LINK_BASE.
+String? _linkFor(String code) =>
+    InviteLink.forCode(code, base: ServerConfig.inviteLinkBase);
+
 String _initial(String? name) {
   final n = name?.trim() ?? '';
   return n.isEmpty ? '?' : n.characters.first.toUpperCase();
@@ -355,10 +362,48 @@ class _InviteDialog extends StatelessWidget {
             ),
           ),
         ),
+        if (_linkFor(code) case final link?) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+            decoration: BoxDecoration(
+              border: Border.all(color: AppColors.border),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.link, size: 18, color: AppColors.muted),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    link,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: AppColors.muted),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Salin tautan',
+                  icon: const Icon(Icons.copy, size: 18),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: link));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Tautan disalin')),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 12),
-        const Text(
-          'Berlaku 7 hari. Karyawan memasang aplikasi Harga Toko, memilih '
-          '"Gabung sebagai karyawan", lalu memasukkan kode ini.',
+        Text(
+          _linkFor(code) == null
+              ? 'Berlaku 7 hari. Karyawan memasang aplikasi Harga Toko, '
+                    'memilih "Gabung sebagai karyawan", lalu memasukkan kode ini.'
+              : 'Berlaku 7 hari. Karyawan cukup mengetuk tautannya, atau '
+                    'memasukkan kode ini di aplikasi lewat "Gabung sebagai '
+                    'karyawan".',
         ),
       ],
     ),
@@ -370,14 +415,18 @@ class _InviteDialog extends StatelessWidget {
             context,
           ).showSnackBar(const SnackBar(content: Text('Kode disalin')));
         },
-        child: const Text('Salin'),
+        child: const Text('Salin kode'),
       ),
       FilledButton.icon(
         onPressed: () {
           Navigator.pop(context);
           SharePlus.instance.share(
             ShareParams(
-              text: TeamService.inviteMessage(code, storeName: storeName),
+              text: TeamService.inviteMessage(
+                code,
+                storeName: storeName,
+                link: _linkFor(code),
+              ),
             ),
           );
         },

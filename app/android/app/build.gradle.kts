@@ -27,6 +27,9 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // Host of the invite links (AndroidManifest.xml), from gradle.properties.
+        manifestPlaceholders["inviteHost"] =
+            (project.findProperty("inviteHost") as String?) ?: "miguelrolandjo-ops.github.io"
     }
 
     buildTypes {

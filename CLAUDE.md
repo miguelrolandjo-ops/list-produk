@@ -96,3 +96,8 @@ category-first home with emoji cards, phone bottom bar / tablet sidebar
 
 Run the app with the server: `flutter run --dart-define-from-file=config.json`
 (copy `config.example.json`). Without it the app runs offline.
+
+Employees join by code or by invite link (`lib/welcome/invite_link.dart`,
+`MainActivity.kt` channel harga_toko/invite, landing page in `invite-site/`).
+The link parameter is `kode`, never `code` (Supabase treats `code` as a login
+callback).

@@ -17,7 +17,7 @@ import '../onboarding/shop_types.dart';
 class WelcomeScreen extends ConsumerStatefulWidget {
   const WelcomeScreen({super.key, this.initialCode});
 
-  /// An invite code to fill in (for invite links, later).
+  /// The code from an invite link: the join form opens with it filled in.
   final String? initialCode;
 
   @override
@@ -117,6 +117,27 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (widget.initialCode != null)
+          Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.tint,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.link, color: AppColors.navy),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Kode dari tautan undangan sudah diisi. Tulis nama Anda, '
+                    'lalu ketuk Gabung.',
+                  ),
+                ),
+              ],
+            ),
+          ),
         TextFormField(
           controller: _code,
           textCapitalization: TextCapitalization.characters,
@@ -148,6 +169,8 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
         const SizedBox(height: 12),
         TextFormField(
           controller: _name,
+          // Opened from a link: the code is there, the name is what's next.
+          autofocus: widget.initialCode != null,
           textCapitalization: TextCapitalization.words,
           decoration: const InputDecoration(
             labelText: 'Nama Anda',

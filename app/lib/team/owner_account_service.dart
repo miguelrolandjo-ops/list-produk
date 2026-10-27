@@ -149,11 +149,23 @@ class TeamService {
     await api.revokeInvite(inviteId);
   }
 
-  /// The message sent with the share sheet (WhatsApp etc.).
-  static String inviteMessage(String code, {String? storeName}) =>
-      'Halo! Ini undangan untuk melihat daftar harga '
-      '${storeName == null ? 'toko' : storeName} di aplikasi Harga Toko.\n\n'
-      'Kode undangan: $code\n\n'
-      'Buka aplikasi Harga Toko, pilih "Gabung sebagai karyawan", lalu '
-      'masukkan kode di atas. Kode berlaku 7 hari.';
+  /// The message sent with the share sheet (WhatsApp etc.): the link to tap
+  /// and, always, the code to type, for when the link doesn't open the app.
+  /// [link] is null when no INVITE_LINK_BASE is configured.
+  static String inviteMessage(String code, {String? storeName, String? link}) {
+    final store = storeName ?? 'toko';
+    if (link == null) {
+      return 'Halo! Ini undangan untuk melihat daftar harga $store di '
+          'aplikasi Harga Toko.\n\n'
+          'Kode undangan: $code\n\n'
+          'Buka aplikasi Harga Toko, pilih "Gabung sebagai karyawan", lalu '
+          'masukkan kode di atas. Kode berlaku 7 hari.';
+    }
+    return 'Halo! Ini undangan untuk melihat daftar harga $store di '
+        'aplikasi Harga Toko.\n\n'
+        'Ketuk tautan ini di HP Anda:\n$link\n\n'
+        'Atau buka aplikasi Harga Toko, pilih "Gabung sebagai karyawan", '
+        'lalu masukkan kode: $code\n\n'
+        'Berlaku 7 hari.';
+  }
 }

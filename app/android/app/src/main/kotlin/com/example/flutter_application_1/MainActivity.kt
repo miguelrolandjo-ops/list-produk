@@ -29,6 +29,13 @@ import java.util.concurrent.Executors
  * files with "takeShared"; while the app runs, "sharedAvailable" tells it new
  * ones arrived.
  *
+ * Invite links ("Gabung sebagai karyawan"), channel harga_toko/invite. A tap
+ * on https://<invite host>/j/?kode=XXXXXXXX (verified App Link) or on the
+ * landing page's "Buka aplikasi" button (hargatoko://join?kode=...) opens the
+ * app; Dart takes the link with "takeInvite", and "inviteAvailable" tells it a
+ * new one arrived while the app runs. The link only fills in the code; the
+ * employee still types a name and taps Gabung.
+ *
  * Backups in the public Download folder, through MediaStore (Android 10+).
  *
  * MediaStore needs no storage permission and no folder prompt for files this
@@ -45,6 +52,10 @@ class MainActivity : FlutterActivity() {
     /** Shrunk shared photos Dart hasn't taken yet. Touched only on [worker]. */
     private val pendingShared = mutableListOf<String>()
     private var shareChannel: MethodChannel? = null
+
+    /** The last invite link Dart hasn't taken yet. Main thread only. */
+    private var pendingInvite: String? = null
+    private var inviteChannel: MethodChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -66,13 +77,37 @@ class MainActivity : FlutterActivity() {
                     }
                 }
             }
+        inviteChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, INVITE_CHANNEL)
+            .also { channel ->
+                channel.setMethodCallHandler { call, result ->
+                    if (call.method != "takeInvite") {
+                        result.notImplemented()
+                        return@setMethodCallHandler
+                    }
+                    val link = pendingInvite
+                    pendingInvite = null
+                    result.success(link)
+                }
+            }
         receiveShare(intent)
+        receiveInvite(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         receiveShare(intent)
+        receiveInvite(intent)
+    }
+
+    /** Keeps an invite link (ACTION_VIEW) for Dart. */
+    private fun receiveInvite(intent: Intent?) {
+        if (intent == null || intent.action != Intent.ACTION_VIEW) return
+        val link = intent.dataString ?: return
+        // Consume it, so recreating the activity doesn't open it twice.
+        intent.action = null
+        pendingInvite = link
+        inviteChannel?.invokeMethod("inviteAvailable", null)
     }
 
     /** Shrinks the images of a share intent and keeps them for Dart. */
@@ -300,6 +335,7 @@ class MainActivity : FlutterActivity() {
     companion object {
         const val CHANNEL = "harga_toko/backup_files"
         const val SHARE_CHANNEL = "harga_toko/share"
+        const val INVITE_CHANNEL = "harga_toko/invite"
 
         /** Same as the app's camera/gallery setting (poMaxSide in Dart). */
         const val SHARE_MAX_SIDE = 1600
