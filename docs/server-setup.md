@@ -25,11 +25,12 @@ Dashboard > **Authentication** > **Sign In / Providers**:
   opens the project's Site URL, which may show an error page; the account is
   confirmed anyway.
 
-## 3. Storage (needed later)
+## 3. Storage
 
-Dashboard > **Storage** > New bucket, both **private**:
-`po-images` (PO photos, Milestone 4) and `product-photos` (product photos, not
-in the app yet). The access policies are already in the migration.
+Only one bucket is needed: **`po-images`** (Milestone 4), set up in step 6
+below. There is no `product-photos` bucket to create: the app has no product
+photos. The migration has policies for one, from the original design, but
+nothing uses them; decide about photos before creating it.
 
 ## 4. App configuration
 
@@ -68,7 +69,16 @@ offline; the account and team screens then say the server isn't set up.
 ## 6. Storage bucket (now required)
 
 Dashboard > **Storage** > New bucket: **`po-images`**, **private** (public
-off). The access policies are already in the migration: only the store's owner
+off). Under the bucket's settings, also set **Restrict file size** to `2 MB`
+and **Allowed MIME types** to `image/jpeg`. The app's photos are well under
+that (see below), and the limit stops anyone from filling the bucket with
+large files.
+
+Photos never reach Supabase at full size. Camera and gallery shrink each page
+to 1600 px on the long side (image_picker), and photos shared from WhatsApp are
+shrunk the same way in `MainActivity.kt`; that's typically a few hundred KB
+per page. The worker deletes the pages as soon as a PO is read (or has failed
+for good), so the bucket is normally empty. The access policies are already in the migration: only the store's owner
 can upload, the worker reads and deletes with the service key.
 
 ## 7. The worker on the Ubuntu server
