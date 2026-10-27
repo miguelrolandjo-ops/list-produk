@@ -13,6 +13,7 @@ import 'core/display_prefs.dart';
 import 'core/router.dart';
 import 'core/server_config.dart';
 import 'core/server_providers.dart';
+import 'core/sqlite_check.dart';
 import 'core/ui.dart';
 import 'inbox/inbox_providers.dart';
 import 'inbox/po_intake_service.dart';
@@ -22,6 +23,12 @@ import 'welcome/invite_link.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Without SQLite nothing works; say so instead of loading forever.
+  final sqlite = sqliteProblem();
+  if (sqlite != null) {
+    runApp(SqliteMissingApp(problem: sqlite));
+    return;
+  }
   // Date names (Okt, Nov, ...) in Indonesian.
   await initializeDateFormatting('id_ID');
   final prefs = await SharedPreferencesWithCache.create(

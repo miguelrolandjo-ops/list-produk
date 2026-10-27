@@ -64,6 +64,12 @@ class _WelcomeScreenState extends ConsumerState<WelcomeScreen> {
       if (mounted) context.go('/karyawan');
     } on ServerException catch (e) {
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } on Object catch (e) {
+      // Not a server answer (the phone's database, for example): never fail
+      // silently.
+      messenger.showSnackBar(
+        SnackBar(content: Text('Tidak bisa bergabung: $e')),
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
